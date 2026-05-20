@@ -30,6 +30,8 @@ Featmap was built for product people to take advantage of a technique called *us
 * Share your user story maps with external stakeholders
 * User story annotations
 * User story estimates with roll-ups
+* **Account-scoped API keys** for scripts and automation (Authorization: Bearer ...)
+* **Built-in MCP server** at `/mcp` -- drive any board from a local LLM agent over Model Context Protocol (Streamable HTTP transport)
 
 ### Intended audience
 Featmap is great for product managers, product owners or just about anyone who is building products. Featmap can also be used as a light weight work item management system for development teams.
@@ -135,6 +137,79 @@ And finally run it.
 ```bash
 docker-compose up -d
 ```
+
+## API keys
+
+Featmap supports per-account API keys for scripting and automation. Open the **Account settings** page (Account menu -> Settings), scroll to **API keys**, name a key, and click **Create key**. The full token is shown exactly once -- copy it immediately.
+
+Keys are SHA-256 hashed at rest; only an 8-character prefix is stored alongside for display. Each request authenticates by sending the plaintext token in an HTTP header:
+
+```
+Authorization: Bearer <your-api-key>
+```
+
+Keys carry the privileges of the account that created them; pass the workspace UUID in the `Workspace:` header (same convention as the cookie-based UI) when calling workspace-scoped endpoints. Revoke a key any time from the same settings page.
+
+## MCP server
+
+Featmap exposes the bulk of its workspace API as a **Model Context Protocol** server at `/mcp`, intended for local LLM-driven automation. The endpoint speaks the Streamable HTTP transport (single POST endpoint, JSON-RPC 2.0 payloads, optional SSE upgrade for server-initiated messages -- unused in this version).
+
+### Configuring a client
+
+Most MCP clients (Claude Desktop, Claude Code, Cursor, etc.) accept a JSON config along these lines:
+
+```json
+{
+  "mcpServers": {
+    "featmap": {
+      "type": "http",
+      "url": "http://localhost:5000/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-api-key>"
+      }
+    }
+  }
+}
+```
+
+### Available tools
+
+29 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
+
+| Group | Tools |
+|---|---|
+| Discovery | `list_workspaces`, `list_projects`, `get_board` |
+| Project | `create_project` |
+| Milestone | `create_milestone`, `move_milestone`, `set_milestone_color`, `set_milestone_status` |
+| Workflow | `create_workflow`, `move_workflow`, `set_workflow_color`, `set_workflow_status` |
+| Subworkflow | `create_subworkflow`, `move_subworkflow`, `set_subworkflow_color`, `set_subworkflow_status` |
+| Feature | `create_feature`, `rename_feature`, `update_feature_description`, `move_feature`, `delete_feature`, `set_feature_color`, `set_feature_status` |
+| Comments | `add_comment` |
+| Personas | `create_persona`, `update_persona`, `delete_persona`, `attach_persona_to_workflow`, `detach_persona_from_workflow` |
+
+Status tools accept `OPEN` or `CLOSED`. Color tools accept any of: `WHITE`, `GREY`, `RED`, `ORANGE`, `YELLOW`, `GREEN`, `TEAL`, `BLUE`, `INDIGO`, `PURPLE`, `PINK`. Avatars are `avatar00` through `avatar08`.
+
+### Recipe: bootstrap a board from zero
+
+```
+list_workspaces                                            -> grab workspace_id
+create_project       workspace_id=..., title=...           -> project_id
+create_milestone     workspace_id=..., project_id=..., title="M1: MVP"
+create_workflow      workspace_id=..., project_id=..., title="User Journey"
+create_subworkflow   workspace_id=..., workflow_id=..., title="Sign Up"
+create_feature       workspace_id=..., subworkflow_id=..., milestone_id=..., title="Email signup"
+set_feature_color    workspace_id=..., feature_id=..., color="RED"
+add_comment          workspace_id=..., feature_id=..., body="**bold** markdown"
+get_board            workspace_id=..., project_id=...      -> full snapshot
+```
+
+The server returns rich JSON for every mutation, so an LLM agent can chain operations without round-tripping through `get_board`.
+
+### Security notes
+
+- Bind to `127.0.0.1` for local-only access. The MCP endpoint sits behind the same `RequireAccount` middleware as the rest of the API, but exposing it publicly without TLS + rate limiting is not recommended.
+- API keys cannot be recovered after creation. Revoke compromised keys immediately.
+- DNS rebinding protection is enabled by default in the upstream MCP Go SDK -- the `Host` header must match a loopback name for `/mcp` requests.
 
 ## License
 Featmap is licensed under Business Source License 1.1. See [license](https://github.com/amborle/featmap/blob/master/LICENSE)

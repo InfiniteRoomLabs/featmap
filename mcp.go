@@ -9,6 +9,11 @@ package main
 // than the legacy `Workspace:` HTTP header, so a single key can drive any
 // workspace the owning account belongs to.
 //
+// Tool handlers are exposed as named package-level functions (mcpFoo) so the
+// test suite can invoke them directly without going through the SDK transport
+// layer. buildMCPServer() wires those handlers in via the generic withService
+// helper, which centralises auth + workspace resolution.
+//
 // Pre-existing transaction bug warning: middleware Transaction() in mware.go
 // always commits regardless of handler outcome (next.ServeHTTP wrapped in
 // `return nil`). Tool handlers MUST NOT panic mid-mutation; partial state
@@ -58,7 +63,10 @@ func resolveWorkspace(s Service, workspaceID string) error {
 	return nil
 }
 
-// Tool arg types -- one per tool, drives JSON schema generation.
+// ---------------------------------------------------------------------------
+// Tool argument types -- one per tool. Drives JSON schema generation via
+// jsonschema struct tags.
+// ---------------------------------------------------------------------------
 
 type emptyArgs struct{}
 
@@ -219,6 +227,7 @@ type detachPersonaArgs struct {
 
 // Status tools use a single string arg with two accepted values, so the LLM
 // can both close and re-open via the same tool name per entity.
+
 type setFeatureStatusArgs struct {
 	WorkspaceID string `json:"workspace_id"`
 	FeatureID   string `json:"feature_id"`
@@ -243,8 +252,212 @@ type setSubWorkflowStatusArgs struct {
 	Status        string `json:"status" jsonschema:"OPEN or CLOSED"`
 }
 
+// ---------------------------------------------------------------------------
+// Tool response types. Promoted to named types so test code can assert on the
+// concrete shape and so MCP's structured output schema generation picks up
+// proper field names.
+// ---------------------------------------------------------------------------
+
+type listWorkspacesResult struct {
+	Workspaces []*Workspace `json:"workspaces"`
+}
+
+type listProjectsResult struct {
+	Projects []*Project `json:"projects"`
+}
+
+type boardResult struct {
+	Project          *Project           `json:"project"`
+	Milestones       []*Milestone       `json:"milestones"`
+	Workflows        []*Workflow        `json:"workflows"`
+	SubWorkflows     []*SubWorkflow     `json:"subWorkflows"`
+	Features         []*Feature         `json:"features"`
+	FeatureComments  []*FeatureComment  `json:"featureComments"`
+	Personas         []*Persona         `json:"personas"`
+	WorkflowPersonas []*WorkflowPersona `json:"workflowPersonas"`
+}
+
+type okResult struct {
+	OK bool `json:"ok"`
+}
+
+// ---------------------------------------------------------------------------
+// Tool handlers. Each handler is a package-level function so tests can invoke
+// it directly without going through the SDK transport. Registration in
+// buildMCPServer wires them in via withService().
+// ---------------------------------------------------------------------------
+
+func mcpListWorkspaces(ctx context.Context, s Service, _ emptyArgs) (listWorkspacesResult, error) {
+	return listWorkspacesResult{Workspaces: s.GetWorkspaces()}, nil
+}
+
+func mcpListProjects(ctx context.Context, s Service, _ workspaceArgs) (listProjectsResult, error) {
+	return listProjectsResult{Projects: s.GetProjects()}, nil
+}
+
+func mcpGetBoard(ctx context.Context, s Service, a getBoardArgs) (boardResult, error) {
+	project := s.GetProject(a.ProjectID)
+	if project == nil {
+		return boardResult{}, errors.New("project not found")
+	}
+	return boardResult{
+		Project:          project,
+		Milestones:       s.GetMilestonesByProject(a.ProjectID),
+		Workflows:        s.GetWorkflowsByProject(a.ProjectID),
+		SubWorkflows:     s.GetSubWorkflowsByProject(a.ProjectID),
+		Features:         s.GetFeaturesByProject(a.ProjectID),
+		FeatureComments:  s.GetFeatureCommentsByProject(a.ProjectID),
+		Personas:         s.GetPersonasByProject(a.ProjectID),
+		WorkflowPersonas: s.GetWorkflowPersonasByProject(a.ProjectID),
+	}, nil
+}
+
+func mcpCreateProject(ctx context.Context, s Service, a createProjectArgs) (*Project, error) {
+	return s.CreateProjectWithID(newUUID(), a.Title)
+}
+
+func mcpCreateMilestone(ctx context.Context, s Service, a createMilestoneArgs) (*Milestone, error) {
+	return s.CreateMilestoneWithID(newUUID(), a.ProjectID, a.Title)
+}
+
+func mcpCreateWorkflow(ctx context.Context, s Service, a createWorkflowArgs) (*Workflow, error) {
+	return s.CreateWorkflowWithID(newUUID(), a.ProjectID, a.Title)
+}
+
+func mcpCreateSubWorkflow(ctx context.Context, s Service, a createSubWorkflowArgs) (*SubWorkflow, error) {
+	return s.CreateSubWorkflowWithID(newUUID(), a.WorkflowID, a.Title)
+}
+
+func mcpCreateFeature(ctx context.Context, s Service, a createFeatureArgs) (*Feature, error) {
+	return s.CreateFeatureWithID(newUUID(), a.SubWorkflowID, a.MilestoneID, a.Title)
+}
+
+func mcpRenameFeature(ctx context.Context, s Service, a renameFeatureArgs) (*Feature, error) {
+	return s.RenameFeature(a.FeatureID, a.Title)
+}
+
+func mcpUpdateFeatureDescription(ctx context.Context, s Service, a updateFeatureDescArgs) (*Feature, error) {
+	return s.UpdateFeatureDescription(a.FeatureID, a.Description)
+}
+
+func mcpMoveFeature(ctx context.Context, s Service, a moveFeatureArgs) (*Feature, error) {
+	return s.MoveFeature(a.FeatureID, a.ToMilestoneID, a.ToSubWorkflowID, a.Index)
+}
+
+func mcpDeleteFeature(ctx context.Context, s Service, a deleteFeatureArgs) (okResult, error) {
+	if err := s.DeleteFeature(a.FeatureID); err != nil {
+		return okResult{OK: false}, err
+	}
+	return okResult{OK: true}, nil
+}
+
+func mcpAddComment(ctx context.Context, s Service, a addCommentArgs) (*FeatureComment, error) {
+	return s.CreateFeatureCommentWithID(newUUID(), a.FeatureID, a.Body)
+}
+
+func mcpSetFeatureColor(ctx context.Context, s Service, a setFeatureColorArgs) (*Feature, error) {
+	return s.ChangeColorOnFeature(a.FeatureID, a.Color)
+}
+
+func mcpSetMilestoneColor(ctx context.Context, s Service, a setMilestoneColorArgs) (*Milestone, error) {
+	return s.ChangeColorOnMilestone(a.MilestoneID, a.Color)
+}
+
+func mcpSetWorkflowColor(ctx context.Context, s Service, a setWorkflowColorArgs) (*Workflow, error) {
+	return s.ChangeColorOnWorkflow(a.WorkflowID, a.Color)
+}
+
+func mcpSetSubWorkflowColor(ctx context.Context, s Service, a setSubWorkflowColorArgs) (*SubWorkflow, error) {
+	return s.ChangeColorOnSubWorkflow(a.SubWorkflowID, a.Color)
+}
+
+func mcpMoveMilestone(ctx context.Context, s Service, a moveMilestoneArgs) (*Milestone, error) {
+	return s.MoveMilestone(a.MilestoneID, a.Index)
+}
+
+func mcpMoveWorkflow(ctx context.Context, s Service, a moveWorkflowArgs) (*Workflow, error) {
+	return s.MoveWorkflow(a.WorkflowID, a.Index)
+}
+
+func mcpMoveSubWorkflow(ctx context.Context, s Service, a moveSubWorkflowArgs) (*SubWorkflow, error) {
+	return s.MoveSubWorkflow(a.SubWorkflowID, a.ToWorkflowID, a.Index)
+}
+
+func mcpSetFeatureStatus(ctx context.Context, s Service, a setFeatureStatusArgs) (*Feature, error) {
+	switch a.Status {
+	case "OPEN":
+		return s.OpenFeature(a.FeatureID)
+	case "CLOSED":
+		return s.CloseFeature(a.FeatureID)
+	default:
+		return nil, errors.New("status must be OPEN or CLOSED")
+	}
+}
+
+func mcpSetMilestoneStatus(ctx context.Context, s Service, a setMilestoneStatusArgs) (*Milestone, error) {
+	switch a.Status {
+	case "OPEN":
+		return s.OpenMilestone(a.MilestoneID)
+	case "CLOSED":
+		return s.CloseMilestone(a.MilestoneID)
+	default:
+		return nil, errors.New("status must be OPEN or CLOSED")
+	}
+}
+
+func mcpSetWorkflowStatus(ctx context.Context, s Service, a setWorkflowStatusArgs) (*Workflow, error) {
+	switch a.Status {
+	case "OPEN":
+		return s.OpenWorkflow(a.WorkflowID)
+	case "CLOSED":
+		return s.CloseWorkflow(a.WorkflowID)
+	default:
+		return nil, errors.New("status must be OPEN or CLOSED")
+	}
+}
+
+func mcpSetSubWorkflowStatus(ctx context.Context, s Service, a setSubWorkflowStatusArgs) (*SubWorkflow, error) {
+	switch a.Status {
+	case "OPEN":
+		return s.OpenSubWorkflow(a.SubWorkflowID)
+	case "CLOSED":
+		return s.CloseSubWorkflow(a.SubWorkflowID)
+	default:
+		return nil, errors.New("status must be OPEN or CLOSED")
+	}
+}
+
+func mcpCreatePersona(ctx context.Context, s Service, a createPersonaArgs) (*Persona, error) {
+	return s.CreatePersonaWithID(newUUID(), a.ProjectID, a.Avatar, a.Name, a.Role, a.Description, a.WorkflowID, newUUID())
+}
+
+func mcpUpdatePersona(ctx context.Context, s Service, a updatePersonaArgs) (*Persona, error) {
+	return s.UpdatePersona(a.PersonaID, a.Avatar, a.Name, a.Role, a.Description)
+}
+
+func mcpDeletePersona(ctx context.Context, s Service, a deletePersonaArgs) (okResult, error) {
+	if err := s.DeletePersona(a.PersonaID); err != nil {
+		return okResult{OK: false}, err
+	}
+	return okResult{OK: true}, nil
+}
+
+func mcpAttachPersonaToWorkflow(ctx context.Context, s Service, a attachPersonaArgs) (*WorkflowPersona, error) {
+	return s.CreateWorkflowPersonaWithID(newUUID(), a.WorkflowID, a.PersonaID)
+}
+
+func mcpDetachPersonaFromWorkflow(ctx context.Context, s Service, a detachPersonaArgs) (okResult, error) {
+	if err := s.DeleteWorkflowPersona(a.WorkflowPersonaID); err != nil {
+		return okResult{OK: false}, err
+	}
+	return okResult{OK: true}, nil
+}
+
+// ---------------------------------------------------------------------------
 // withService is a tool-handler decorator that pulls the per-request Service
 // out of context and short-circuits if auth middleware didn't populate it.
+// ---------------------------------------------------------------------------
+
 func withService[In, Out any](
 	resolveWS func(In) string,
 	fn func(context.Context, Service, In) (Out, error),
@@ -278,385 +491,138 @@ func buildMCPServer() *mcpsdk.Server {
 		Version: "0.1.0",
 	}, nil)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "list_workspaces",
-		Description: "List all workspaces the authenticated account belongs to. Call first to discover workspace IDs.",
-	}, withService(
-		func(emptyArgs) string { return "" },
-		func(ctx context.Context, s Service, _ emptyArgs) (struct {
-			Workspaces []*Workspace `json:"workspaces"`
-		}, error) {
-			return struct {
-				Workspaces []*Workspace `json:"workspaces"`
-			}{Workspaces: s.GetWorkspaces()}, nil
-		},
-	))
+	add(srv, "list_workspaces",
+		"List all workspaces the authenticated account belongs to. Call first to discover workspace IDs.",
+		func(emptyArgs) string { return "" }, mcpListWorkspaces)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "list_projects",
-		Description: "List all projects in a workspace.",
-	}, withService(
-		func(a workspaceArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, _ workspaceArgs) (struct {
-			Projects []*Project `json:"projects"`
-		}, error) {
-			return struct {
-				Projects []*Project `json:"projects"`
-			}{Projects: s.GetProjects()}, nil
-		},
-	))
+	add(srv, "list_projects",
+		"List all projects in a workspace.",
+		func(a workspaceArgs) string { return a.WorkspaceID }, mcpListProjects)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "get_board",
-		Description: "Fetch the entire story map for a project: milestones, workflows, subworkflows, features, feature comments, personas, workflow personas.",
-	}, withService(
-		func(a getBoardArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a getBoardArgs) (map[string]any, error) {
-			project := s.GetProject(a.ProjectID)
-			if project == nil {
-				return nil, errors.New("project not found")
-			}
-			return map[string]any{
-				"project":          project,
-				"milestones":       s.GetMilestonesByProject(a.ProjectID),
-				"workflows":        s.GetWorkflowsByProject(a.ProjectID),
-				"subWorkflows":     s.GetSubWorkflowsByProject(a.ProjectID),
-				"features":         s.GetFeaturesByProject(a.ProjectID),
-				"featureComments":  s.GetFeatureCommentsByProject(a.ProjectID),
-				"personas":         s.GetPersonasByProject(a.ProjectID),
-				"workflowPersonas": s.GetWorkflowPersonasByProject(a.ProjectID),
-			}, nil
-		},
-	))
+	add(srv, "get_board",
+		"Fetch the entire story map for a project: milestones, workflows, subworkflows, features, feature comments, personas, workflow personas.",
+		func(a getBoardArgs) string { return a.WorkspaceID }, mcpGetBoard)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "create_project",
-		Description: "Create a new project in a workspace. A project owns the entire story map (milestones, workflows, subworkflows, features).",
-	}, withService(
-		func(a createProjectArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a createProjectArgs) (*Project, error) {
-			return s.CreateProjectWithID(newUUID(), a.Title)
-		},
-	))
+	add(srv, "create_project",
+		"Create a new project in a workspace. A project owns the entire story map (milestones, workflows, subworkflows, features).",
+		func(a createProjectArgs) string { return a.WorkspaceID }, mcpCreateProject)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "create_milestone",
-		Description: "Create a milestone (release column, horizontal) inside a project. Milestones group features by planned release.",
-	}, withService(
-		func(a createMilestoneArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a createMilestoneArgs) (*Milestone, error) {
-			return s.CreateMilestoneWithID(newUUID(), a.ProjectID, a.Title)
-		},
-	))
+	add(srv, "create_milestone",
+		"Create a milestone (release column, horizontal) inside a project. Milestones group features by planned release.",
+		func(a createMilestoneArgs) string { return a.WorkspaceID }, mcpCreateMilestone)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "create_workflow",
-		Description: "Create a workflow (activity, top row) inside a project. Workflows group subworkflows.",
-	}, withService(
-		func(a createWorkflowArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a createWorkflowArgs) (*Workflow, error) {
-			return s.CreateWorkflowWithID(newUUID(), a.ProjectID, a.Title)
-		},
-	))
+	add(srv, "create_workflow",
+		"Create a workflow (activity, top row) inside a project. Workflows group subworkflows.",
+		func(a createWorkflowArgs) string { return a.WorkspaceID }, mcpCreateWorkflow)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "create_subworkflow",
-		Description: "Create a subworkflow (step / vertical column) inside a workflow. Features live at the intersection of a subworkflow and a milestone.",
-	}, withService(
-		func(a createSubWorkflowArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a createSubWorkflowArgs) (*SubWorkflow, error) {
-			return s.CreateSubWorkflowWithID(newUUID(), a.WorkflowID, a.Title)
-		},
-	))
+	add(srv, "create_subworkflow",
+		"Create a subworkflow (step / vertical column) inside a workflow. Features live at the intersection of a subworkflow and a milestone.",
+		func(a createSubWorkflowArgs) string { return a.WorkspaceID }, mcpCreateSubWorkflow)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "create_feature",
-		Description: "Create a new feature (story card) inside the intersection of a subworkflow and a milestone. Server mints the UUID and positions the card at the end of the target cell.",
-	}, withService(
-		func(a createFeatureArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a createFeatureArgs) (*Feature, error) {
-			id := newUUID()
-			return s.CreateFeatureWithID(id, a.SubWorkflowID, a.MilestoneID, a.Title)
-		},
-	))
+	add(srv, "create_feature",
+		"Create a new feature (story card) inside the intersection of a subworkflow and a milestone. Server mints the UUID and positions the card at the end of the target cell.",
+		func(a createFeatureArgs) string { return a.WorkspaceID }, mcpCreateFeature)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "rename_feature",
-		Description: "Change the title of an existing feature card.",
-	}, withService(
-		func(a renameFeatureArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a renameFeatureArgs) (*Feature, error) {
-			return s.RenameFeature(a.FeatureID, a.Title)
-		},
-	))
+	add(srv, "rename_feature",
+		"Change the title of an existing feature card.",
+		func(a renameFeatureArgs) string { return a.WorkspaceID }, mcpRenameFeature)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "update_feature_description",
-		Description: "Replace the markdown description of a feature card.",
-	}, withService(
-		func(a updateFeatureDescArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a updateFeatureDescArgs) (*Feature, error) {
-			return s.UpdateFeatureDescription(a.FeatureID, a.Description)
-		},
-	))
+	add(srv, "update_feature_description",
+		"Replace the markdown description of a feature card.",
+		func(a updateFeatureDescArgs) string { return a.WorkspaceID }, mcpUpdateFeatureDescription)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "move_feature",
-		Description: "Move a feature to a different milestone and/or subworkflow, at a given 0-based index within the target cell. Server computes the lexorank.",
-	}, withService(
-		func(a moveFeatureArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a moveFeatureArgs) (*Feature, error) {
-			return s.MoveFeature(a.FeatureID, a.ToMilestoneID, a.ToSubWorkflowID, a.Index)
-		},
-	))
+	add(srv, "move_feature",
+		"Move a feature to a different milestone and/or subworkflow, at a given 0-based index within the target cell. Server computes the lexorank.",
+		func(a moveFeatureArgs) string { return a.WorkspaceID }, mcpMoveFeature)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "delete_feature",
-		Description: "Remove a feature card.",
-	}, withService(
-		func(a deleteFeatureArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a deleteFeatureArgs) (struct {
-			OK bool `json:"ok"`
-		}, error) {
-			if err := s.DeleteFeature(a.FeatureID); err != nil {
-				return struct {
-					OK bool `json:"ok"`
-				}{OK: false}, err
-			}
-			return struct {
-				OK bool `json:"ok"`
-			}{OK: true}, nil
-		},
-	))
+	add(srv, "delete_feature",
+		"Remove a feature card.",
+		func(a deleteFeatureArgs) string { return a.WorkspaceID }, mcpDeleteFeature)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "add_comment",
-		Description: "Add a comment to a feature card. Body is markdown.",
-	}, withService(
-		func(a addCommentArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a addCommentArgs) (*FeatureComment, error) {
-			return s.CreateFeatureCommentWithID(newUUID(), a.FeatureID, a.Body)
-		},
-	))
+	add(srv, "add_comment",
+		"Add a comment to a feature card. Body is markdown.",
+		func(a addCommentArgs) string { return a.WorkspaceID }, mcpAddComment)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "set_feature_color",
-		Description: "Set the color band on a feature (story card). Use color to highlight risk, theme, or status. Valid colors: WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK.",
-	}, withService(
-		func(a setFeatureColorArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a setFeatureColorArgs) (*Feature, error) {
-			return s.ChangeColorOnFeature(a.FeatureID, a.Color)
-		},
-	))
+	add(srv, "set_feature_color",
+		"Set the color band on a feature (story card). Use color to highlight risk, theme, or status. Valid colors: WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK.",
+		func(a setFeatureColorArgs) string { return a.WorkspaceID }, mcpSetFeatureColor)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "set_milestone_color",
-		Description: "Set the color of a milestone (release row). Valid colors: WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK.",
-	}, withService(
-		func(a setMilestoneColorArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a setMilestoneColorArgs) (*Milestone, error) {
-			return s.ChangeColorOnMilestone(a.MilestoneID, a.Color)
-		},
-	))
+	add(srv, "set_milestone_color",
+		"Set the color of a milestone (release row). Valid colors: WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK.",
+		func(a setMilestoneColorArgs) string { return a.WorkspaceID }, mcpSetMilestoneColor)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "set_workflow_color",
-		Description: "Set the color of a workflow (activity column). Valid colors: WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK.",
-	}, withService(
-		func(a setWorkflowColorArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a setWorkflowColorArgs) (*Workflow, error) {
-			return s.ChangeColorOnWorkflow(a.WorkflowID, a.Color)
-		},
-	))
+	add(srv, "set_workflow_color",
+		"Set the color of a workflow (activity column). Valid colors: WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK.",
+		func(a setWorkflowColorArgs) string { return a.WorkspaceID }, mcpSetWorkflowColor)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "set_subworkflow_color",
-		Description: "Set the color of a subworkflow (step). Valid colors: WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK.",
-	}, withService(
-		func(a setSubWorkflowColorArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a setSubWorkflowColorArgs) (*SubWorkflow, error) {
-			return s.ChangeColorOnSubWorkflow(a.SubWorkflowID, a.Color)
-		},
-	))
+	add(srv, "set_subworkflow_color",
+		"Set the color of a subworkflow (step). Valid colors: WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK.",
+		func(a setSubWorkflowColorArgs) string { return a.WorkspaceID }, mcpSetSubWorkflowColor)
 
-	// Structural move tools. Move semantics mirror move_feature: server
-	// computes the lexorank for the target index, callers stay ignorant of
-	// rank strings.
+	add(srv, "move_milestone",
+		"Reorder a milestone (release column) within its project. Index is 0-based among siblings.",
+		func(a moveMilestoneArgs) string { return a.WorkspaceID }, mcpMoveMilestone)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "move_milestone",
-		Description: "Reorder a milestone (release column) within its project. Index is 0-based among siblings.",
-	}, withService(
-		func(a moveMilestoneArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a moveMilestoneArgs) (*Milestone, error) {
-			return s.MoveMilestone(a.MilestoneID, a.Index)
-		},
-	))
+	add(srv, "move_workflow",
+		"Reorder a workflow (activity row) within its project. Index is 0-based among siblings.",
+		func(a moveWorkflowArgs) string { return a.WorkspaceID }, mcpMoveWorkflow)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "move_workflow",
-		Description: "Reorder a workflow (activity row) within its project. Index is 0-based among siblings.",
-	}, withService(
-		func(a moveWorkflowArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a moveWorkflowArgs) (*Workflow, error) {
-			return s.MoveWorkflow(a.WorkflowID, a.Index)
-		},
-	))
+	add(srv, "move_subworkflow",
+		"Move a subworkflow to another (or the same) workflow at a 0-based index. Use to reorder columns or graft a step onto a different activity.",
+		func(a moveSubWorkflowArgs) string { return a.WorkspaceID }, mcpMoveSubWorkflow)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "move_subworkflow",
-		Description: "Move a subworkflow to another (or the same) workflow at a 0-based index. Use to reorder columns or graft a step onto a different activity.",
-	}, withService(
-		func(a moveSubWorkflowArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a moveSubWorkflowArgs) (*SubWorkflow, error) {
-			return s.MoveSubWorkflow(a.SubWorkflowID, a.ToWorkflowID, a.Index)
-		},
-	))
+	add(srv, "set_feature_status",
+		"Close or re-open a feature card. Pass status: \"OPEN\" or \"CLOSED\". Closed cards stay on the board but render as done.",
+		func(a setFeatureStatusArgs) string { return a.WorkspaceID }, mcpSetFeatureStatus)
 
-	// Status tools. Each is a single tool per entity that toggles via the
-	// `status` arg, so close + reopen share a name.
+	add(srv, "set_milestone_status",
+		"Close or re-open a milestone (release column). Pass status: \"OPEN\" or \"CLOSED\".",
+		func(a setMilestoneStatusArgs) string { return a.WorkspaceID }, mcpSetMilestoneStatus)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "set_feature_status",
-		Description: "Close or re-open a feature card. Pass status: \"OPEN\" or \"CLOSED\". Closed cards stay on the board but render as done.",
-	}, withService(
-		func(a setFeatureStatusArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a setFeatureStatusArgs) (*Feature, error) {
-			switch a.Status {
-			case "OPEN":
-				return s.OpenFeature(a.FeatureID)
-			case "CLOSED":
-				return s.CloseFeature(a.FeatureID)
-			default:
-				return nil, errors.New("status must be OPEN or CLOSED")
-			}
-		},
-	))
+	add(srv, "set_workflow_status",
+		"Close or re-open a workflow (activity row). Pass status: \"OPEN\" or \"CLOSED\".",
+		func(a setWorkflowStatusArgs) string { return a.WorkspaceID }, mcpSetWorkflowStatus)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "set_milestone_status",
-		Description: "Close or re-open a milestone (release column). Pass status: \"OPEN\" or \"CLOSED\".",
-	}, withService(
-		func(a setMilestoneStatusArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a setMilestoneStatusArgs) (*Milestone, error) {
-			switch a.Status {
-			case "OPEN":
-				return s.OpenMilestone(a.MilestoneID)
-			case "CLOSED":
-				return s.CloseMilestone(a.MilestoneID)
-			default:
-				return nil, errors.New("status must be OPEN or CLOSED")
-			}
-		},
-	))
+	add(srv, "set_subworkflow_status",
+		"Close or re-open a subworkflow (step / column). Pass status: \"OPEN\" or \"CLOSED\".",
+		func(a setSubWorkflowStatusArgs) string { return a.WorkspaceID }, mcpSetSubWorkflowStatus)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "set_workflow_status",
-		Description: "Close or re-open a workflow (activity row). Pass status: \"OPEN\" or \"CLOSED\".",
-	}, withService(
-		func(a setWorkflowStatusArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a setWorkflowStatusArgs) (*Workflow, error) {
-			switch a.Status {
-			case "OPEN":
-				return s.OpenWorkflow(a.WorkflowID)
-			case "CLOSED":
-				return s.CloseWorkflow(a.WorkflowID)
-			default:
-				return nil, errors.New("status must be OPEN or CLOSED")
-			}
-		},
-	))
+	add(srv, "create_persona",
+		"Create a persona inside a project. Personas describe target users. Avatar must be one of avatar00..avatar08. If workflow_id is supplied, also attaches the persona to that workflow.",
+		func(a createPersonaArgs) string { return a.WorkspaceID }, mcpCreatePersona)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "set_subworkflow_status",
-		Description: "Close or re-open a subworkflow (step / column). Pass status: \"OPEN\" or \"CLOSED\".",
-	}, withService(
-		func(a setSubWorkflowStatusArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a setSubWorkflowStatusArgs) (*SubWorkflow, error) {
-			switch a.Status {
-			case "OPEN":
-				return s.OpenSubWorkflow(a.SubWorkflowID)
-			case "CLOSED":
-				return s.CloseSubWorkflow(a.SubWorkflowID)
-			default:
-				return nil, errors.New("status must be OPEN or CLOSED")
-			}
-		},
-	))
+	add(srv, "update_persona",
+		"Edit an existing persona's avatar/name/role/description.",
+		func(a updatePersonaArgs) string { return a.WorkspaceID }, mcpUpdatePersona)
 
-	// Persona tools. Personas live at the project level but get attached to
-	// workflows via the workflow_personas table -- they describe WHO an
-	// activity (workflow) is for. Cards have no direct persona link.
+	add(srv, "delete_persona",
+		"Delete a persona. Cascade-removes all workflow attachments for that persona.",
+		func(a deletePersonaArgs) string { return a.WorkspaceID }, mcpDeletePersona)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "create_persona",
-		Description: "Create a persona inside a project. Personas describe target users. Avatar must be one of avatar00..avatar08. If workflow_id is supplied, also attaches the persona to that workflow.",
-	}, withService(
-		func(a createPersonaArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a createPersonaArgs) (*Persona, error) {
-			return s.CreatePersonaWithID(newUUID(), a.ProjectID, a.Avatar, a.Name, a.Role, a.Description, a.WorkflowID, newUUID())
-		},
-	))
+	add(srv, "attach_persona_to_workflow",
+		"Attach an existing persona to a workflow (the activity row). Same persona can be attached to multiple workflows.",
+		func(a attachPersonaArgs) string { return a.WorkspaceID }, mcpAttachPersonaToWorkflow)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "update_persona",
-		Description: "Edit an existing persona's avatar/name/role/description.",
-	}, withService(
-		func(a updatePersonaArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a updatePersonaArgs) (*Persona, error) {
-			return s.UpdatePersona(a.PersonaID, a.Avatar, a.Name, a.Role, a.Description)
-		},
-	))
-
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "delete_persona",
-		Description: "Delete a persona. Cascade-removes all workflow attachments for that persona.",
-	}, withService(
-		func(a deletePersonaArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a deletePersonaArgs) (struct {
-			OK bool `json:"ok"`
-		}, error) {
-			if err := s.DeletePersona(a.PersonaID); err != nil {
-				return struct {
-					OK bool `json:"ok"`
-				}{OK: false}, err
-			}
-			return struct {
-				OK bool `json:"ok"`
-			}{OK: true}, nil
-		},
-	))
-
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "attach_persona_to_workflow",
-		Description: "Attach an existing persona to a workflow (the activity row). Same persona can be attached to multiple workflows.",
-	}, withService(
-		func(a attachPersonaArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a attachPersonaArgs) (*WorkflowPersona, error) {
-			return s.CreateWorkflowPersonaWithID(newUUID(), a.WorkflowID, a.PersonaID)
-		},
-	))
-
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "detach_persona_from_workflow",
-		Description: "Remove a workflow-persona link. Pass the workflow_persona_id (NOT the persona_id) -- find it in get_board.workflowPersonas[].id.",
-	}, withService(
-		func(a detachPersonaArgs) string { return a.WorkspaceID },
-		func(ctx context.Context, s Service, a detachPersonaArgs) (struct {
-			OK bool `json:"ok"`
-		}, error) {
-			if err := s.DeleteWorkflowPersona(a.WorkflowPersonaID); err != nil {
-				return struct {
-					OK bool `json:"ok"`
-				}{OK: false}, err
-			}
-			return struct {
-				OK bool `json:"ok"`
-			}{OK: true}, nil
-		},
-	))
+	add(srv, "detach_persona_from_workflow",
+		"Remove a workflow-persona link. Pass the workflow_persona_id (NOT the persona_id) -- find it in get_board.workflowPersonas[].id.",
+		func(a detachPersonaArgs) string { return a.WorkspaceID }, mcpDetachPersonaFromWorkflow)
 
 	return srv
+}
+
+// add is a tiny generic helper that hides the AddTool + withService combo.
+// Keeps the registration block above readable as a near-table.
+func add[In, Out any](
+	srv *mcpsdk.Server,
+	name string,
+	description string,
+	resolveWS func(In) string,
+	handler func(context.Context, Service, In) (Out, error),
+) {
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        name,
+		Description: description,
+	}, withService(resolveWS, handler))
 }
 
 // mcpHTTPHandler returns an http.Handler that serves the MCP Streamable HTTP
