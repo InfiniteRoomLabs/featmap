@@ -259,6 +259,47 @@ export const API_SET_PASSWORD = async (data: API_NEW_PASSWORD_REQ) => {
     });
 }
 
+// API KEYS
+
+export interface IAPIKey {
+    id: string
+    name: string
+    keyPrefix: string
+    createdAt: string
+    lastUsedAt?: string
+    expiresAt?: string
+    revokedAt?: string
+}
+
+export interface API_CREATE_API_KEY_RESP {
+    apiKey: IAPIKey
+    plaintext: string
+}
+
+export const API_LIST_API_KEYS = async () => {
+    return await fetch(endpoint + "/account/apikeys", {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        credentials: 'include',
+    });
+}
+
+export const API_CREATE_API_KEY = async (name: string) => {
+    return await fetch(endpoint + "/account/apikeys", {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name })
+    });
+}
+
+export const API_REVOKE_API_KEY = async (id: string) => {
+    return await fetch(endpoint + "/account/apikeys/" + id, {
+        method: 'DELETE',
+        credentials: 'include',
+    });
+}
+
 // MEMBERS MANAGEMENT
 
 export const API_GET_MEMBERS = async (workspaceId: string) => {

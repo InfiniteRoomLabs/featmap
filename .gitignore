@@ -61,3 +61,6 @@ _testmain.go
 workspace.xml
 featmap
 **/bindata.go
+# Local MCP client config -- contains live API key bearer tokens. Never commit.
+/.mcp.json
+/webapp/package-lock.json

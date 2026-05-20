@@ -198,3 +198,16 @@ type WorkflowPersona struct {
 	ID          string `db:"id" json:"id"`
 	PersonaID   string `db:"persona_id" json:"personaId"`
 }
+
+// APIKey ...
+type APIKey struct {
+	ID          string     `db:"id" json:"id"`
+	AccountID   string     `db:"account_id" json:"-"`
+	Name        string     `db:"name" json:"name"`
+	KeyHash     string     `db:"key_hash" json:"-"`
+	KeyPrefix   string     `db:"key_prefix" json:"keyPrefix"`
+	CreatedAt   time.Time  `db:"created_at" json:"createdAt"`
+	LastUsedAt  *time.Time `db:"last_used_at" json:"lastUsedAt,omitempty"`
+	ExpiresAt   *time.Time `db:"expires_at" json:"expiresAt,omitempty"`
+	RevokedAt   *time.Time `db:"revoked_at" json:"revokedAt,omitempty"`
+}

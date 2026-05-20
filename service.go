@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"log"
 	"net/http"
 	"strings"
@@ -157,6 +159,11 @@ type Service interface {
 	CreatePersonaWithID(id string, projectID string, avatar string, name string, role string, description string, workflowID string, workflowPersonaID string) (*Persona, error)
 	DeletePersona(id string) error
 	UpdatePersona(id string, avatar string, name string, role string, description string) (*Persona, error)
+
+	CreateAPIKey(name string) (plaintext string, key *APIKey, err error)
+	ListAPIKeys() ([]*APIKey, error)
+	RevokeAPIKey(id string) error
+	AuthenticateAPIKey(plaintext string) (*APIKey, *Account, error)
 }
 
 type service struct {
@@ -2260,4 +2267,85 @@ func validAvatar(avatar string) bool {
 		return true
 	}
 	return false
+}
+
+// API Keys
+
+// hashAPIKey computes SHA-256 hex of plaintext. Used both at create-time
+// (store hash) and at request-auth-time (hash incoming bearer token, lookup).
+func hashAPIKey(plaintext string) string {
+	sum := sha256.Sum256([]byte(plaintext))
+	return hex.EncodeToString(sum[:])
+}
+
+// generateAPIKey returns (plaintext, hash, prefix).
+// plaintext is shown to user ONCE on create. UUID v4 = 122 bits entropy,
+// dashes are valid in HTTP Authorization Bearer tokens (RFC 7235 token68).
+func generateAPIKey() (plaintext, hash, prefix string) {
+	plaintext = uuid.NewV4().String()
+	hash = hashAPIKey(plaintext)
+	prefix = plaintext[:8]
+	return
+}
+
+func (s *service) CreateAPIKey(name string) (string, *APIKey, error) {
+	if s.Acc == nil {
+		return "", nil, errors.New("account required")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", nil, errors.New("name required")
+	}
+	if len(name) > 80 {
+		return "", nil, errors.New("name too long")
+	}
+
+	plaintext, hash, prefix := generateAPIKey()
+	k := &APIKey{
+		ID:        uuid.NewV4().String(),
+		AccountID: s.Acc.ID,
+		Name:      name,
+		KeyHash:   hash,
+		KeyPrefix: prefix,
+		CreatedAt: time.Now().UTC(),
+	}
+	s.r.StoreAPIKey(k)
+	return plaintext, k, nil
+}
+
+func (s *service) ListAPIKeys() ([]*APIKey, error) {
+	if s.Acc == nil {
+		return nil, errors.New("account required")
+	}
+	return s.r.FindAPIKeysByAccount(s.Acc.ID)
+}
+
+func (s *service) RevokeAPIKey(id string) error {
+	if s.Acc == nil {
+		return errors.New("account required")
+	}
+	s.r.RevokeAPIKey(s.Acc.ID, id)
+	return nil
+}
+
+// AuthenticateAPIKey hashes the plaintext, looks up the key, and returns
+// the key + owning account if valid and not revoked.
+func (s *service) AuthenticateAPIKey(plaintext string) (*APIKey, *Account, error) {
+	if plaintext == "" {
+		return nil, nil, errors.New("empty token")
+	}
+	hash := hashAPIKey(plaintext)
+	k, err := s.r.GetAPIKeyByHash(hash)
+	if err != nil {
+		return nil, nil, err
+	}
+	if k.ExpiresAt != nil && k.ExpiresAt.Before(time.Now().UTC()) {
+		return nil, nil, errors.New("api key expired")
+	}
+	acc, err := s.r.GetAccount(k.AccountID)
+	if err != nil {
+		return nil, nil, err
+	}
+	s.r.TouchAPIKeyLastUsed(k.ID)
+	return k, acc, nil
 }

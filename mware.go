@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/jwtauth"
 	"github.com/go-chi/render"
@@ -74,19 +75,49 @@ func Auth(auth *jwtauth.JWTAuth) func(next http.Handler) http.Handler {
 	}
 }
 
+// extractBearerToken pulls the token from an Authorization: Bearer <token> header.
+// Returns empty string if header is missing or malformed.
+func extractBearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if h == "" {
+		return ""
+	}
+	const prefix = "Bearer "
+	if !strings.HasPrefix(h, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(h[len(prefix):])
+}
+
 // User ...
+//
+// Resolves the authenticated account onto the service. Tries two paths:
+//  1. Authorization: Bearer <api-key> header -- SHA-256 lookup against api_keys
+//  2. JWT cookie (legacy web UI path)
+//
+// API keys are scoped to the account; workspace context still comes from the
+// Workspace HTTP header so a single key can drive multi-workspace automation.
 func User() func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		fn := func(w http.ResponseWriter, r *http.Request) {
 
 			s := GetEnv(r).Service
-			_, claims, _ := jwtauth.FromContext(r.Context())
-			accountID, aok := claims["id"]
 
 			var acc *Account
-			if aok {
-				acc, _ = s.GetAccount(accountID.(string))
-				s.SetAccountObject(acc)
+
+			if token := extractBearerToken(r); token != "" {
+				if _, a, err := s.AuthenticateAPIKey(token); err == nil && a != nil {
+					acc = a
+					s.SetAccountObject(acc)
+				}
+			}
+
+			if acc == nil {
+				_, claims, _ := jwtauth.FromContext(r.Context())
+				if accountID, aok := claims["id"]; aok {
+					acc, _ = s.GetAccount(accountID.(string))
+					s.SetAccountObject(acc)
+				}
 			}
 
 			if acc != nil {

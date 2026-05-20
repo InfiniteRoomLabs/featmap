@@ -124,6 +124,16 @@ func main() {
 	r.Route("/v1/account", accountAPI) // Account needed
 	r.Route("/v1/", workspaceAPI)      // Account + workspace is needed
 
+	// MCP endpoint -- Streamable HTTP transport, bearer-token auth only.
+	// Workspace context comes from per-tool args, not the Workspace header,
+	// so a single API key can operate across any workspace the account belongs to.
+	mcpH := mcpHTTPHandler()
+	r.Route("/mcp", func(r chi.Router) {
+		r.Use(RequireAccount())
+		r.Handle("/*", mcpH)
+		r.Handle("/", mcpH)
+	})
+
 	files := &assetfs.AssetFS{
 		Asset:    webapp.Asset,
 		AssetDir: webapp.AssetDir,

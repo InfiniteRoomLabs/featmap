@@ -24,7 +24,56 @@ func accountAPI(r chi.Router) {
 
 		r.Post("/workspaces", createWorkspace)
 
+		r.Get("/apikeys", listAPIKeys)
+		r.Post("/apikeys", createAPIKey)
+		r.Delete("/apikeys/{ID}", revokeAPIKey)
+
 	})
+}
+
+type createAPIKeyRequest struct {
+	Name string `json:"name"`
+}
+
+func (p *createAPIKeyRequest) Bind(r *http.Request) error { return nil }
+
+type createAPIKeyResponse struct {
+	APIKey    *APIKey `json:"apiKey"`
+	Plaintext string  `json:"plaintext"`
+}
+
+func listAPIKeys(w http.ResponseWriter, r *http.Request) {
+	s := GetEnv(r).Service
+	keys, err := s.ListAPIKeys()
+	if err != nil {
+		_ = render.Render(w, r, ErrInvalidRequest(err))
+		return
+	}
+	render.JSON(w, r, keys)
+}
+
+func createAPIKey(w http.ResponseWriter, r *http.Request) {
+	data := &createAPIKeyRequest{}
+	if err := render.Bind(r, data); err != nil {
+		_ = render.Render(w, r, ErrInvalidRequest(err))
+		return
+	}
+	s := GetEnv(r).Service
+	plaintext, key, err := s.CreateAPIKey(data.Name)
+	if err != nil {
+		_ = render.Render(w, r, ErrInvalidRequest(err))
+		return
+	}
+	render.JSON(w, r, createAPIKeyResponse{APIKey: key, Plaintext: plaintext})
+}
+
+func revokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "ID")
+	s := GetEnv(r).Service
+	if err := s.RevokeAPIKey(id); err != nil {
+		_ = render.Render(w, r, ErrInvalidRequest(err))
+		return
+	}
 }
 
 func getApp(w http.ResponseWriter, r *http.Request) {

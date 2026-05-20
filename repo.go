@@ -47,6 +47,12 @@ type Repository interface {
 	GetInvite(workspaceID string, id string) (*Invite, error)
 	FindInvitesByWorkspace(wsid string) ([]*Invite, error)
 
+	StoreAPIKey(x *APIKey)
+	GetAPIKeyByHash(hash string) (*APIKey, error)
+	FindAPIKeysByAccount(accountID string) ([]*APIKey, error)
+	RevokeAPIKey(accountID string, id string)
+	TouchAPIKeyLastUsed(id string)
+
 	GetProjectByExternalLink(link string) (*Project, error)
 	GetProject(workspaceID string, projectID string) (*Project, error)
 	FindProjectsByWorkspace(workspaceID string) ([]*Project, error)
@@ -648,4 +654,37 @@ func (a *repo) StoreWorkflowPersona(x *WorkflowPersona) {
 
 func (a *repo) DeleteWorkflowPersona(workspaceID string, id string) {
 	a.tx.MustExec("DELETE FROM workflow_personas WHERE workspace_id=$1 AND id=$2", workspaceID, id)
+}
+
+// API Keys
+
+func (a *repo) StoreAPIKey(x *APIKey) {
+	a.tx.MustExec(
+		"INSERT INTO api_keys (id, account_id, name, key_hash, key_prefix, created_at, last_used_at, expires_at, revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+		x.ID, x.AccountID, x.Name, x.KeyHash, x.KeyPrefix, x.CreatedAt, x.LastUsedAt, x.ExpiresAt, x.RevokedAt)
+}
+
+func (a *repo) GetAPIKeyByHash(hash string) (*APIKey, error) {
+	x := &APIKey{}
+	if err := a.tx.Get(x, "SELECT * FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL", hash); err != nil {
+		return nil, errors.Wrap(err, "api key not found")
+	}
+	return x, nil
+}
+
+func (a *repo) FindAPIKeysByAccount(accountID string) ([]*APIKey, error) {
+	x := []*APIKey{}
+	err := a.tx.Select(&x, "SELECT * FROM api_keys WHERE account_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC", accountID)
+	if err != nil {
+		return nil, errors.Wrap(err, "no api keys found")
+	}
+	return x, nil
+}
+
+func (a *repo) RevokeAPIKey(accountID string, id string) {
+	a.tx.MustExec("UPDATE api_keys SET revoked_at = NOW() WHERE account_id = $1 AND id = $2 AND revoked_at IS NULL", accountID, id)
+}
+
+func (a *repo) TouchAPIKeyLastUsed(id string) {
+	a.tx.MustExec("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1", id)
 }

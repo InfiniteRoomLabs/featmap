@@ -9,6 +9,7 @@ import { Formik, FormikHelpers as FormikActions, FormikProps, Form, Field, Field
 import * as Yup from 'yup';
 import { API_CHANGE_EMAIL_REQ, API_CHANGE_EMAIL, API_RESEND_EMAIL, API_CHANGE_NAME, API_CHANGE_NAME_REQ, API_DELETE_ACCOUNT } from '../api'
 import { newMessage } from '../store/application/actions';
+import ApiKeysSection from '../components/ApiKeysSection'
 
 
 const mapDispatchToProps = (dispatch: Dispatch<AllActions>) => ({
@@ -225,6 +226,8 @@ class WorkspacesPage extends Component<Props, State> {
                     <CardLayout title="Password">
                         <p>To change your password, initiate a <Link className="link" to={"/account/reset?email=" + this.props.state.application.application.account!.email}  >password reset</Link>.</p>
                     </CardLayout>
+
+                    <ApiKeysSection />
 
                     <CardLayout title="Delete account">
                         <p>By deleting your account, all your workspace memberships will be permanently deleted.</p>
