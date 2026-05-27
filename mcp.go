@@ -579,6 +579,10 @@ func buildMCPServer() *mcpsdk.Server {
 		"Update many feature cards in one call (max 100). Each item carries a feature_id plus only the fields to change (title, description, color, status, to_milestone_id, to_subworkflow_id, index) -- same partial semantics as update_feature. Best-effort: per-item {index, ok, id, error} in input order; an empty or oversized batch is rejected with no writes.",
 		func(a bulkUpdateFeaturesArgs) string { return a.WorkspaceID }, mcpBulkUpdateFeatures)
 
+	add(srv, "bulk_add_comment",
+		"Add comments to many feature cards in one call (max 100). Each item carries a feature_id and a comment body. Best-effort: per-item {index, ok, id, error} in input order, isolated by per-item savepoints; an empty or oversized batch is rejected with no writes.",
+		func(a bulkAddCommentArgs) string { return a.WorkspaceID }, mcpBulkAddComment)
+
 	add(srv, "update_milestone",
 		"Update a milestone (release row) in one call, applying only the fields you provide (omit a field to leave it unchanged). Optional fields: title, color (WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK), status (OPEN or CLOSED), and index (0-based position among siblings).",
 		func(a updateMilestoneArgs) string { return a.WorkspaceID }, mcpUpdateMilestone)

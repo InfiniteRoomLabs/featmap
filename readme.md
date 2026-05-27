@@ -174,7 +174,7 @@ Most MCP clients (Claude Desktop, Claude Code, Cursor, etc.) accept a JSON confi
 
 ### Available tools
 
-47 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
+48 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
 
 | Group | Tools |
 |---|---|
