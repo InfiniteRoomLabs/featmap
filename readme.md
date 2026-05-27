@@ -174,25 +174,29 @@ Most MCP clients (Claude Desktop, Claude Code, Cursor, etc.) accept a JSON confi
 
 ### Available tools
 
-32 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
+47 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
 
 | Group | Tools |
 |---|---|
 | Discovery | `list_workspaces`, `list_projects`, `get_board` |
 | Project | `create_project` |
-| Milestone | `create_milestone`, `move_milestone`, `set_milestone_color`, `set_milestone_status` |
-| Workflow | `create_workflow`, `move_workflow`, `set_workflow_color`, `set_workflow_status` |
-| Subworkflow | `create_subworkflow`, `move_subworkflow`, `set_subworkflow_color`, `set_subworkflow_status` |
+| Milestone | `create_milestone`, `update_milestone`, `move_milestone`, `set_milestone_color`, `set_milestone_status` |
+| Workflow | `create_workflow`, `update_workflow`, `move_workflow`, `set_workflow_color`, `set_workflow_status` |
+| Subworkflow | `create_subworkflow`, `update_subworkflow`, `move_subworkflow`, `set_subworkflow_color`, `set_subworkflow_status` |
 | Feature | `create_feature`, `update_feature`, `rename_feature`, `update_feature_description`, `move_feature`, `delete_feature`, `set_feature_color`, `set_feature_status` |
 | Comments | `add_comment` |
 | Personas | `create_persona`, `update_persona`, `delete_persona`, `attach_persona_to_workflow`, `detach_persona_from_workflow` |
-| Bulk | `bulk_create_features`, `bulk_update_features` |
+| Bulk: create | `bulk_create_features`, `bulk_create_milestones`, `bulk_create_workflows`, `bulk_create_subworkflows`, `bulk_create_personas` |
+| Bulk: update | `bulk_update_features`, `bulk_update_milestones`, `bulk_update_workflows`, `bulk_update_subworkflows` |
+| Bulk: other | `bulk_add_comment`, `bulk_attach_personas`, `bulk_detach_personas`, `bulk_reorder_features`, `bulk_delete_features`, `bulk_delete_personas` |
 
 Status tools accept `OPEN` or `CLOSED`. Color tools accept any of: `WHITE`, `GREY`, `RED`, `ORANGE`, `YELLOW`, `GREEN`, `TEAL`, `BLUE`, `INDIGO`, `PURPLE`, `PINK`. Avatars are `avatar00` through `avatar08`.
 
-`update_feature` is a unified **partial** update: pass `feature_id` plus any subset of `title`, `description`, `color`, `status`, `to_milestone_id`, `to_subworkflow_id`, `index` -- omitted fields are left unchanged. It supersedes `rename_feature` / `update_feature_description` / `set_feature_color` / `set_feature_status` / `move_feature` (which remain for compatibility).
+`update_feature` is a unified **partial** update: pass `feature_id` plus any subset of `title`, `description`, `color`, `status`, `to_milestone_id`, `to_subworkflow_id`, `index` -- omitted fields are left unchanged. It supersedes `rename_feature` / `update_feature_description` / `set_feature_color` / `set_feature_status` / `move_feature` (which remain for compatibility). `update_milestone`, `update_workflow`, `update_subworkflow`, and `update_persona` are partial in the same way -- only the fields you pass change.
 
 The `bulk_*` tools take an `items` array (max 100) and return `{ "results": [ { "index", "ok", "id", "error" } ] }`, one entry per input item in order. Items are best-effort and isolated by per-item savepoints: a failing item reports its error in its own slot without aborting the others or the surrounding transaction.
+
+`bulk_reorder_features` is the exception -- it is all-or-nothing and must list **every** feature in the target `(milestone, subworkflow)` cell exactly once (a count mismatch, non-member, or duplicate rejects the whole call with no writes); the server assigns the lexorank chain so the cell ends in exactly the given order.
 
 ### Recipe: bootstrap a board from zero
 

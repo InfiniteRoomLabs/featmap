@@ -200,13 +200,16 @@ type createPersonaArgs struct {
 	WorkflowID  string `json:"workflow_id,omitempty" jsonschema:"optional workflow UUID; if provided the persona is also attached to that workflow"`
 }
 
+// updatePersonaArgs uses pointer fields so update_persona is true-partial:
+// only the fields you supply change. Omitting role/description no longer blanks
+// them (the prior non-pointer version overwrote every column with zero values).
 type updatePersonaArgs struct {
-	WorkspaceID string `json:"workspace_id"`
-	PersonaID   string `json:"persona_id"`
-	Name        string `json:"name"`
-	Avatar      string `json:"avatar" jsonschema:"avatar slug; one of: avatar00, avatar01, avatar02, avatar03, avatar04, avatar05, avatar06, avatar07, avatar08"`
-	Role        string `json:"role,omitempty"`
-	Description string `json:"description,omitempty"`
+	WorkspaceID string  `json:"workspace_id"`
+	PersonaID   string  `json:"persona_id"`
+	Name        *string `json:"name,omitempty"`
+	Avatar      *string `json:"avatar,omitempty" jsonschema:"avatar slug; one of: avatar00, avatar01, avatar02, avatar03, avatar04, avatar05, avatar06, avatar07, avatar08"`
+	Role        *string `json:"role,omitempty"`
+	Description *string `json:"description,omitempty"`
 }
 
 type deletePersonaArgs struct {
@@ -432,7 +435,32 @@ func mcpCreatePersona(ctx context.Context, s Service, a createPersonaArgs) (*Per
 }
 
 func mcpUpdatePersona(ctx context.Context, s Service, a updatePersonaArgs) (*Persona, error) {
-	return s.UpdatePersona(a.PersonaID, a.Avatar, a.Name, a.Role, a.Description)
+	// Validate avatar up front (fail-fast) when provided, then merge only the
+	// supplied fields onto the current persona before storing.
+	if a.Avatar != nil && !validAvatar(*a.Avatar) {
+		return nil, errors.New("avatar not valid")
+	}
+	cur, err := s.GetRepoObject().GetPersona(s.GetWorkspaceObject().ID, a.PersonaID)
+	if err != nil || cur == nil {
+		return nil, errors.New("persona does not exist")
+	}
+	avatar := cur.Avatar
+	if a.Avatar != nil {
+		avatar = *a.Avatar
+	}
+	name := cur.Name
+	if a.Name != nil {
+		name = *a.Name
+	}
+	role := cur.Role
+	if a.Role != nil {
+		role = *a.Role
+	}
+	description := cur.Description
+	if a.Description != nil {
+		description = *a.Description
+	}
+	return s.UpdatePersona(a.PersonaID, avatar, name, role, description)
 }
 
 func mcpDeletePersona(ctx context.Context, s Service, a deletePersonaArgs) (okResult, error) {
@@ -551,6 +579,66 @@ func buildMCPServer() *mcpsdk.Server {
 		"Update many feature cards in one call (max 100). Each item carries a feature_id plus only the fields to change (title, description, color, status, to_milestone_id, to_subworkflow_id, index) -- same partial semantics as update_feature. Best-effort: per-item {index, ok, id, error} in input order; an empty or oversized batch is rejected with no writes.",
 		func(a bulkUpdateFeaturesArgs) string { return a.WorkspaceID }, mcpBulkUpdateFeatures)
 
+	add(srv, "update_milestone",
+		"Update a milestone (release row) in one call, applying only the fields you provide (omit a field to leave it unchanged). Optional fields: title, color (WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK), status (OPEN or CLOSED), and index (0-based position among siblings).",
+		func(a updateMilestoneArgs) string { return a.WorkspaceID }, mcpUpdateMilestone)
+
+	add(srv, "update_workflow",
+		"Update a workflow (activity row) in one call, applying only the fields you provide (omit a field to leave it unchanged). Optional fields: title, color, status (OPEN or CLOSED), and index (0-based position among siblings).",
+		func(a updateWorkflowArgs) string { return a.WorkspaceID }, mcpUpdateWorkflow)
+
+	add(srv, "update_subworkflow",
+		"Update a subworkflow (step / column) in one call, applying only the fields you provide (omit a field to leave it unchanged). Optional fields: title, color, status (OPEN or CLOSED), movement (to_workflow_id to graft onto another workflow, index for position). When moving, omit index to append to the end of the target workflow.",
+		func(a updateSubWorkflowArgs) string { return a.WorkspaceID }, mcpUpdateSubWorkflow)
+
+	add(srv, "bulk_create_milestones",
+		"Create many milestones in one call (max 100). Each item targets a project with a title. Best-effort: per-item {index, ok, id, error} in input order; an empty or oversized batch is rejected with no writes.",
+		func(a bulkCreateMilestonesArgs) string { return a.WorkspaceID }, mcpBulkCreateMilestones)
+
+	add(srv, "bulk_create_workflows",
+		"Create many workflows in one call (max 100). Each item targets a project with a title. Best-effort: per-item {index, ok, id, error} in input order; an empty or oversized batch is rejected with no writes.",
+		func(a bulkCreateWorkflowsArgs) string { return a.WorkspaceID }, mcpBulkCreateWorkflows)
+
+	add(srv, "bulk_create_subworkflows",
+		"Create many subworkflows in one call (max 100). Each item targets a workflow with a title. Best-effort: per-item {index, ok, id, error} in input order; an empty or oversized batch is rejected with no writes.",
+		func(a bulkCreateSubWorkflowsArgs) string { return a.WorkspaceID }, mcpBulkCreateSubWorkflows)
+
+	add(srv, "bulk_create_personas",
+		"Create many personas in one call (max 100). Each item targets a project with a name and avatar (avatar00..avatar08), plus optional role and description. Best-effort: per-item {index, ok, id, error} in input order; an empty or oversized batch is rejected with no writes.",
+		func(a bulkCreatePersonasArgs) string { return a.WorkspaceID }, mcpBulkCreatePersonas)
+
+	add(srv, "bulk_update_milestones",
+		"Update many milestones in one call (max 100). Each item carries a milestone_id plus only the fields to change (title, color, status, index) -- same partial semantics as update_milestone. Best-effort: per-item {index, ok, id, error} in input order; empty/oversized batches rejected with no writes.",
+		func(a bulkUpdateMilestonesArgs) string { return a.WorkspaceID }, mcpBulkUpdateMilestones)
+
+	add(srv, "bulk_update_workflows",
+		"Update many workflows in one call (max 100). Each item carries a workflow_id plus only the fields to change (title, color, status, index) -- same partial semantics as update_workflow. Best-effort: per-item {index, ok, id, error} in input order; empty/oversized batches rejected with no writes.",
+		func(a bulkUpdateWorkflowsArgs) string { return a.WorkspaceID }, mcpBulkUpdateWorkflows)
+
+	add(srv, "bulk_update_subworkflows",
+		"Update many subworkflows in one call (max 100). Each item carries a subworkflow_id plus only the fields to change (title, color, status, to_workflow_id, index) -- same partial semantics as update_subworkflow. Best-effort: per-item {index, ok, id, error} in input order; empty/oversized batches rejected with no writes.",
+		func(a bulkUpdateSubWorkflowsArgs) string { return a.WorkspaceID }, mcpBulkUpdateSubWorkflows)
+
+	add(srv, "bulk_reorder_features",
+		"Reorder all features in one cell (the milestone x subworkflow intersection) to exactly the given order in a single pass. feature_ids MUST list every feature in that cell (milestone_id + subworkflow_id) exactly once, in the desired top-to-bottom order -- a partial list is rejected. The server assigns lexorank ranks declaratively, avoiding the index-shift problem of repeated move_feature calls. Returns the features in their new order. Any id not in the cell, a duplicate, or a count that does not match the cell rejects the whole call with no writes.",
+		func(a bulkReorderFeaturesArgs) string { return a.WorkspaceID }, mcpBulkReorderFeatures)
+
+	add(srv, "bulk_attach_personas",
+		"Attach many personas to workflows in one call (max 100). Each item carries a persona_id and a workflow_id. Best-effort: per-item {index, ok, id (the new workflow-persona link id), error} in input order; empty/oversized batches rejected with no writes.",
+		func(a bulkAttachPersonasArgs) string { return a.WorkspaceID }, mcpBulkAttachPersonas)
+
+	add(srv, "bulk_detach_personas",
+		"Detach many persona-workflow links in one call (max 100). Each item carries a workflow_persona_id (the link id, NOT the persona_id -- see get_board.workflowPersonas[].id). Best-effort: per-item {index, ok, id, error} in input order; empty/oversized batches rejected with no writes.",
+		func(a bulkDetachPersonasArgs) string { return a.WorkspaceID }, mcpBulkDetachPersonas)
+
+	add(srv, "bulk_delete_features",
+		"Delete many feature cards in one call (max 100). Each item carries a feature_id. Best-effort: per-item {index, ok, id, error} in input order; a bogus id fails its slot; empty/oversized batches rejected with no writes.",
+		func(a bulkDeleteFeaturesArgs) string { return a.WorkspaceID }, mcpBulkDeleteFeatures)
+
+	add(srv, "bulk_delete_personas",
+		"Delete many personas in one call (max 100). Each item carries a persona_id; each delete cascade-removes that persona's workflow attachments. Best-effort: per-item {index, ok, id, error} in input order; empty/oversized batches rejected with no writes.",
+		func(a bulkDeletePersonasArgs) string { return a.WorkspaceID }, mcpBulkDeletePersonas)
+
 	add(srv, "add_comment",
 		"Add a comment to a feature card. Body is markdown.",
 		func(a addCommentArgs) string { return a.WorkspaceID }, mcpAddComment)
@@ -604,7 +692,7 @@ func buildMCPServer() *mcpsdk.Server {
 		func(a createPersonaArgs) string { return a.WorkspaceID }, mcpCreatePersona)
 
 	add(srv, "update_persona",
-		"Edit an existing persona's avatar/name/role/description.",
+		"Edit an existing persona, applying only the fields you provide (omit a field to leave it unchanged). Optional fields: name, avatar (avatar00..avatar08), role, description.",
 		func(a updatePersonaArgs) string { return a.WorkspaceID }, mcpUpdatePersona)
 
 	add(srv, "delete_persona",

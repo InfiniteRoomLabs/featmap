@@ -135,6 +135,7 @@ type Service interface {
 
 	GetFeaturesByProject(id string) []*Feature
 	MoveFeature(id string, toMilestoneID string, toSubWorkflowID string, index int) (*Feature, error)
+	ReorderFeatures(milestoneID string, subWorkflowID string, featureIDs []string) ([]*Feature, error)
 	CreateFeatureWithID(id string, subWorkflowID string, milestoneID string, title string) (*Feature, error)
 	RenameFeature(id string, title string) (*Feature, error)
 	DeleteFeature(id string) error
@@ -1803,6 +1804,85 @@ func (s *service) MoveFeature(id string, toMilestoneID string, toSubWorkflowID s
 	s.r.StoreFeature(m)
 
 	return m, nil
+}
+
+// ReorderFeatures assigns lexorank ranks so the features named in featureIDs end
+// up in exactly that order within the (milestoneID, subWorkflowID) cell, in a
+// single pass. Unlike N sequential MoveFeature calls, the final order is
+// expressed declaratively and is not subject to index-shift between calls.
+//
+// featureIDs MUST be exactly the set of features in the target cell -- same
+// length, same membership, no duplicates. A subset is rejected (otherwise the
+// named features would silently drop below the omitted ones, since new ranks are
+// chained above the cell's current max). All validation AND the full lexorank
+// chain are computed up front; StoreFeature is only called once every rank is in
+// hand, so a bad input or a rank-allocation failure produces ZERO writes (mware
+// Transaction() always commits, so a partial write loop could not be undone).
+func (s *service) ReorderFeatures(milestoneID string, subWorkflowID string, featureIDs []string) ([]*Feature, error) {
+	if len(featureIDs) == 0 {
+		return nil, errors.New("feature_ids must not be empty")
+	}
+
+	cell, err := s.r.FindFeaturesByMilestoneAndSubWorkflow(s.Member.WorkspaceID, milestoneID, subWorkflowID)
+	if err != nil {
+		return nil, err
+	}
+
+	byID := map[string]*Feature{}
+	// maxRank is the highest rank currently held by any feature in the cell.
+	// We chain the new ranks strictly ABOVE it so each freshly assigned rank
+	// never collides with a not-yet-rewritten sibling -- the cell's UNIQUE
+	// (workspace_id, milestone_id, subworkflow_id, rank) constraint forbids even
+	// a transient duplicate mid-reorder.
+	maxRank := ""
+	for _, f := range cell {
+		byID[f.ID] = f
+		if f.Rank > maxRank {
+			maxRank = f.Rank
+		}
+	}
+
+	// Enforce full-set: exactly the cell's features, no more, no less, no dupes.
+	if len(featureIDs) != len(cell) {
+		return nil, errors.New("feature_ids must list every feature in the cell exactly once")
+	}
+	ordered := make([]*Feature, 0, len(featureIDs))
+	seen := map[string]bool{}
+	for _, id := range featureIDs {
+		if seen[id] {
+			return nil, errors.New("duplicate feature id: " + id)
+		}
+		seen[id] = true
+		f, ok := byID[id]
+		if !ok {
+			return nil, errors.New("feature not in target cell: " + id)
+		}
+		ordered = append(ordered, f)
+	}
+
+	// Pre-compute the entire rank chain before any write. If lexorank ever
+	// fails to allocate, we bail with zero StoreFeature calls.
+	ranks := make([]string, len(ordered))
+	prev := maxRank
+	for i := range ordered {
+		rank, ok := lexorank.Rank(prev, "")
+		if !ok {
+			return nil, errors.New("could not allocate rank; cell needs reshuffle")
+		}
+		ranks[i] = rank
+		prev = rank
+	}
+
+	// All ranks in hand -- commit the writes.
+	now := time.Now().UTC()
+	for i, f := range ordered {
+		f.Rank = ranks[i]
+		f.LastModifiedByName = s.Acc.Name
+		f.LastModified = now
+		s.r.StoreFeature(f)
+	}
+
+	return ordered, nil
 }
 
 func (s *service) GetFeaturesByProject(id string) []*Feature {

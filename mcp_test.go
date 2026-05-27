@@ -953,8 +953,8 @@ func Test_update_persona(t *testing.T) {
 		t.Run("happy: all fields changed", func(t *testing.T) {
 			p, err := mcpUpdatePersona(ctx, s, updatePersonaArgs{
 				WorkspaceID: ws.ID, PersonaID: fix.Persona.ID,
-				Name: "Renamed", Avatar: "avatar07",
-				Role: "Admin", Description: "updated desc",
+				Name: strptr("Renamed"), Avatar: strptr("avatar07"),
+				Role: strptr("Admin"), Description: strptr("updated desc"),
 			})
 			mustOK(t, err, "update")
 			if p.Name != "Renamed" || p.Avatar != "avatar07" {
@@ -965,7 +965,7 @@ func Test_update_persona(t *testing.T) {
 		t.Run("sad: nonexistent persona", func(t *testing.T) {
 			_, err := mcpUpdatePersona(ctx, s, updatePersonaArgs{
 				WorkspaceID: ws.ID, PersonaID: newUUID(),
-				Name: "X", Avatar: "avatar00",
+				Name: strptr("X"), Avatar: strptr("avatar00"),
 			})
 			if err == nil {
 				t.Errorf("expected error")
@@ -975,7 +975,7 @@ func Test_update_persona(t *testing.T) {
 		t.Run("enraged: bad avatar", func(t *testing.T) {
 			_, err := mcpUpdatePersona(ctx, s, updatePersonaArgs{
 				WorkspaceID: ws.ID, PersonaID: fix.Persona.ID,
-				Name: "ok", Avatar: "nope",
+				Name: strptr("ok"), Avatar: strptr("nope"),
 			})
 			if err == nil {
 				t.Errorf("expected avatar error")
