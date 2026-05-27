@@ -13,6 +13,10 @@ type Repository interface {
 
 	SetTx(tx *sqlx.Tx)
 
+	Savepoint(name string) error
+	RollbackToSavepoint(name string) error
+	ReleaseSavepoint(name string) error
+
 	StoreWorkspace(x *Workspace)
 	GetWorkspace(workspaceID string) (*Workspace, error)
 	GetWorkspacesByAccount(id string) ([]*Workspace, error)
@@ -140,6 +144,28 @@ func (a *repo) DB() *sqlx.DB {
 
 func (a *repo) SetTx(tx *sqlx.Tx) {
 	a.tx = tx
+}
+
+// Savepoint family: nested transaction control used by bulk MCP tools to
+// isolate each item on the shared request transaction. Uses Exec (NOT MustExec)
+// so a failure here returns an error instead of panicking -- cleanup paths must
+// never panic. `name` must be a caller-controlled identifier (fixed prefix +
+// integer index), never user input, since savepoint names cannot be
+// parameterized in SQL.
+
+func (a *repo) Savepoint(name string) error {
+	_, err := a.tx.Exec("SAVEPOINT " + name)
+	return err
+}
+
+func (a *repo) RollbackToSavepoint(name string) error {
+	_, err := a.tx.Exec("ROLLBACK TO SAVEPOINT " + name)
+	return err
+}
+
+func (a *repo) ReleaseSavepoint(name string) error {
+	_, err := a.tx.Exec("RELEASE SAVEPOINT " + name)
+	return err
 }
 
 // Workspaces

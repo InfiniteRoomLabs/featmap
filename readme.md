@@ -174,7 +174,7 @@ Most MCP clients (Claude Desktop, Claude Code, Cursor, etc.) accept a JSON confi
 
 ### Available tools
 
-29 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
+32 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
 
 | Group | Tools |
 |---|---|
@@ -183,11 +183,16 @@ Most MCP clients (Claude Desktop, Claude Code, Cursor, etc.) accept a JSON confi
 | Milestone | `create_milestone`, `move_milestone`, `set_milestone_color`, `set_milestone_status` |
 | Workflow | `create_workflow`, `move_workflow`, `set_workflow_color`, `set_workflow_status` |
 | Subworkflow | `create_subworkflow`, `move_subworkflow`, `set_subworkflow_color`, `set_subworkflow_status` |
-| Feature | `create_feature`, `rename_feature`, `update_feature_description`, `move_feature`, `delete_feature`, `set_feature_color`, `set_feature_status` |
+| Feature | `create_feature`, `update_feature`, `rename_feature`, `update_feature_description`, `move_feature`, `delete_feature`, `set_feature_color`, `set_feature_status` |
 | Comments | `add_comment` |
 | Personas | `create_persona`, `update_persona`, `delete_persona`, `attach_persona_to_workflow`, `detach_persona_from_workflow` |
+| Bulk | `bulk_create_features`, `bulk_update_features` |
 
 Status tools accept `OPEN` or `CLOSED`. Color tools accept any of: `WHITE`, `GREY`, `RED`, `ORANGE`, `YELLOW`, `GREEN`, `TEAL`, `BLUE`, `INDIGO`, `PURPLE`, `PINK`. Avatars are `avatar00` through `avatar08`.
+
+`update_feature` is a unified **partial** update: pass `feature_id` plus any subset of `title`, `description`, `color`, `status`, `to_milestone_id`, `to_subworkflow_id`, `index` -- omitted fields are left unchanged. It supersedes `rename_feature` / `update_feature_description` / `set_feature_color` / `set_feature_status` / `move_feature` (which remain for compatibility).
+
+The `bulk_*` tools take an `items` array (max 100) and return `{ "results": [ { "index", "ok", "id", "error" } ] }`, one entry per input item in order. Items are best-effort and isolated by per-item savepoints: a failing item reports its error in its own slot without aborting the others or the surrounding transaction.
 
 ### Recipe: bootstrap a board from zero
 

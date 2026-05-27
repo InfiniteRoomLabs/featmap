@@ -56,7 +56,8 @@ All Go files live in the repo root as a single package. Layering is by file, not
 - `main.go` -- chi router wiring, config load, migration runner, JWT auth init, static asset serving
 - `mware.go` -- middleware stack (`ContextSkeleton`, `Transaction`, `Auth`, `User`) + `RequireAccount`/`RequireMember`/`RequireAdmin`/`RequireOwner`/`RequireSubscription` guards
 - `*-api.go` -- HTTP handlers grouped by domain (`users-api`, `account-api`, `workspace-api`, `subscription-api`, `link-api`). `account-api.go` also carries the API-key CRUD (`GET/POST/DELETE /v1/account/apikeys`)
-- `mcp.go` -- Streamable HTTP MCP server (29 tools) + helpers. Tool handlers are package-level `mcpFoo` funcs wired via `buildMCPServer()`; `withService` centralises bearer auth + `resolveWorkspace`. See the MCP section below
+- `mcp.go` -- Streamable HTTP MCP server (32 tools) + helpers. Tool handlers are package-level `mcpFoo` funcs wired via `buildMCPServer()`; `withService` centralises bearer auth + `resolveWorkspace`. See the MCP section below
+- `mcp_bulk.go` -- bulk + unified-partial feature tools (`update_feature`, `bulk_create_features`, `bulk_update_features`) layered on the single-entity tools. Bulk loops run via `runBulkTx`, which wraps each item in a Postgres SAVEPOINT so a per-item failure rolls back its own slot instead of poisoning the shared always-commit transaction (see the Transaction gotcha below)
 - `service.go` -- business logic, `Service` interface (huge -- ~50KB). All handler logic calls into the service via `GetEnv(r).Service`
 - `repo.go` -- `Repository` interface + sqlx impl, all SQL lives here
 - `model.go` -- domain structs (Workspace, Account, Member, Project, Milestone, Workflow, Subworkflow, Feature, Persona, Invite, Subscription, FeatureComment, Annotation)
@@ -118,7 +119,7 @@ CORS allowlist is `appSiteURL` + `http://localhost:3000` (hardcoded for CRA dev 
 
 ## MCP Server & API Keys
 
-Fork-local addition (commit `d71173a`). Featmap exposes most of its workspace API as a **Model Context Protocol** server so local LLM agents can drive boards. End-user docs (full 29-tool table, color/status enums, bootstrap recipe) live in `readme.md` -- this section is the dev/architecture view.
+Fork-local addition (commit `d71173a`). Featmap exposes most of its workspace API as a **Model Context Protocol** server so local LLM agents can drive boards. End-user docs (full 32-tool table, color/status enums, bootstrap recipe) live in `readme.md` -- this section is the dev/architecture view.
 
 ### How auth works
 

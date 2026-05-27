@@ -539,6 +539,18 @@ func buildMCPServer() *mcpsdk.Server {
 		"Remove a feature card.",
 		func(a deleteFeatureArgs) string { return a.WorkspaceID }, mcpDeleteFeature)
 
+	add(srv, "update_feature",
+		"Update a feature card in one call, applying only the fields you provide (omit a field to leave it unchanged). Optional fields: title, description, color (WHITE, GREY, RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, INDIGO, PURPLE, PINK), status (OPEN or CLOSED), and movement (to_milestone_id, to_subworkflow_id, index). When moving, omit index to append to the end of the target cell; the server computes the lexorank. With no optional fields set, returns the current feature unchanged.",
+		func(a updateFeatureArgs) string { return a.WorkspaceID }, mcpUpdateFeature)
+
+	add(srv, "bulk_create_features",
+		"Create many feature cards in one call (max 100). Each item targets a subworkflow+milestone intersection with a title. Best-effort: each item succeeds or fails independently; the response lists per-item {index, ok, id, error} in input order. An empty or oversized batch is rejected with no writes.",
+		func(a bulkCreateFeaturesArgs) string { return a.WorkspaceID }, mcpBulkCreateFeatures)
+
+	add(srv, "bulk_update_features",
+		"Update many feature cards in one call (max 100). Each item carries a feature_id plus only the fields to change (title, description, color, status, to_milestone_id, to_subworkflow_id, index) -- same partial semantics as update_feature. Best-effort: per-item {index, ok, id, error} in input order; an empty or oversized batch is rejected with no writes.",
+		func(a bulkUpdateFeaturesArgs) string { return a.WorkspaceID }, mcpBulkUpdateFeatures)
+
 	add(srv, "add_comment",
 		"Add a comment to a feature card. Body is markdown.",
 		func(a addCommentArgs) string { return a.WorkspaceID }, mcpAddComment)
