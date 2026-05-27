@@ -36,7 +36,7 @@ cd webapp && pnpm start             # serves on :3000
 cd webapp && pnpm test
 ```
 
-Prerequisites for source builds: Go 1.23+, Node + npm, `go-bindata` (`go install github.com/kevinburke/go-bindata/v4/...@latest` -- original `jteeuwen/go-bindata` is archived), PostgreSQL.
+Prerequisites for **host** source builds: Go 1.25+ (matches `go.mod`), Node + pnpm, `go-bindata` (`go install github.com/kevinburke/go-bindata/v4/...@v4.0.2` -- original `jteeuwen/go-bindata` is archived), PostgreSQL. The **docker** path needs none of these -- the multi-stage `Dockerfile` runs the whole webapp+bindata+go build in pinned builder images.
 
 **Module policy note**: Migrated from `npm` to `pnpm`. Webapp builds need a few workarounds documented in `webapp/.npmrc`:
 - `trust-policy-exclude[]=semver` -- multiple `semver` versions in CRA 4's transitive tree pre-date npm provenance; the global pnpm `trust-policy=no-downgrade` would refuse the install.
@@ -161,7 +161,7 @@ Tool handlers are exposed as package-level `mcpFoo` funcs so the suite (`mcp_tes
 ## Gotchas
 
 - **`package main` everywhere**: no internal subpackages. New backend code goes in a new top-level `*.go` file or an existing one.
-- **`go.mod` runs Go 1.23 but pins old `+incompatible` deps** (`jwt-go` superseded by `golang-jwt/jwt`, `satori/go.uuid` archived, `stripe-go v70` is years behind). Old deps still compile under modern Go; don't casually `go get -u` -- upgrades need real testing.
+- **`go.mod` runs Go 1.25 but pins old `+incompatible` deps** (`jwt-go` superseded by `golang-jwt/jwt`, `satori/go.uuid` archived, `stripe-go v70` is years behind). Old deps still compile under modern Go; don't casually `go get -u` -- upgrades need real testing.
 - **Migrations are append-only**: never edit a committed `*.up.sql`. Add a new numbered file.
 - **`go-bindata` is required** at build time. Without regenerating after changing migrations/templates/webapp build, the binary ships stale assets.
 - **Webapp ESLint config is just `react-app`** -- no custom rules. CRA defaults apply.

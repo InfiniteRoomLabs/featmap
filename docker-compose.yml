@@ -1,7 +1,6 @@
-version: "2.1"
 services:
         postgres:
-                image: postgres:11-alpine
+                image: postgres:16-alpine@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
                 restart: always
                 volumes:
                         - ${PWD}/data:/var/lib/postgresql/data
@@ -15,16 +14,20 @@ services:
                         timeout: 5s
                         retries: 5
         featmap:
-                image: amborle/featmap
+                # Locally built fork image. pull_policy:never so compose can never
+                # silently fall back to the upstream amborle/featmap on Docker Hub
+                # (which lacks the MCP server + API-key changes).
+                image: featmap-fork:local
+                pull_policy: never
                 restart: always
-                build: 
+                build:
                         context: .
                         dockerfile: Dockerfile
                 ports:
                         - ${FEATMAP_HTTP_PORT}:${FEATMAP_HTTP_PORT}
-                depends_on: 
+                depends_on:
                     postgres:
                         condition: service_healthy
                 volumes:
-                        - ${PWD}/conf.json:/opt/featmap/conf.json
+                        - ${PWD}/conf.json:/opt/featmap/conf.json:ro
 

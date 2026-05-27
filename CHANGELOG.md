@@ -21,8 +21,21 @@ Entries below cover fork-local changes; upstream history is in the git log.
   (`mcp.go`, mounted in `main.go` behind `RequireAccount`).
 - `ApiKeysSection` panel on the account page with one-shot plaintext reveal,
   copy-to-clipboard, and revoke (`webapp/src/components/ApiKeysSection.tsx`).
+- `.dockerignore` keeping secrets (`conf.json`, `.env`, `.mcp.json`) and regenerated
+  artifacts (`node_modules`, `bindata.go`, `webapp/build`) out of the build context.
 
 ### Changed
+- Rewrote `Dockerfile` as a digest-pinned multi-stage build (pnpm + `--frozen-lockfile`,
+  go-bindata v4, static binary on distroless-nonroot), replacing the stale single-stage
+  one that used npm, the archived `jteeuwen/go-bindata`, and a `go get -u` install pattern
+  that no longer works on modern Go. The whole webapp + bindata + go build now runs in
+  pinned builder images with no host toolchain required.
+- `docker-compose.yml`: build image renamed to `featmap-fork:local` with `pull_policy: never`
+  (so compose can never silently fall back to the upstream Hub image), postgres bumped to
+  `16-alpine` digest-pinned, and the `conf.json` mount made read-only.
+- `webapp/.npmrc`: pin `auto-install-peers=false` to match the lockfile so
+  `pnpm install --frozen-lockfile` works without the global pnpm hardening config
+  (fixes `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` in containers/CI).
 - `mware.go` `User()` now authenticates `Authorization: Bearer <key>` first and falls
   back to the JWT cookie, giving REST and MCP a single auth surface.
 - Bumped `go.mod` from Go 1.15 to 1.23 and added `modelcontextprotocol/go-sdk` v1.6.0.

@@ -1,0 +1,21 @@
+# Build context hygiene. Keep secrets and regenerated artifacts out of image layers.
+
+# Secrets / local runtime config -- never bake into a layer
+/conf.json
+/.env
+/.mcp.json
+/data
+
+# Regenerated inside the build (webui stage builds webapp/build; build stage
+# runs go-bindata). Exclude host copies so they can't go stale or bloat context.
+/webapp/node_modules
+/webapp/build
+**/bindata.go
+
+# Prebuilt host binaries / VCS / editor noise
+/bin
+.git
+.gitignore
+*.md
+.vscode
+.idea
