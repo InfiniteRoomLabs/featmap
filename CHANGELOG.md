@@ -15,10 +15,26 @@ Entries below cover fork-local changes; upstream history is in the git log.
   managed from the Account settings page. Keys are UUID v4, SHA-256 hashed at rest
   with an 8-char display prefix, and shown in plaintext exactly once at creation
   (`migrations/23_api_keys.up.sql`, `account-api.go`, `model.go`/`repo.go`/`service.go`).
-- Built-in MCP server at `/mcp` exposing 29 workspace tools to local LLM agents over
+- Built-in MCP server at `/mcp` exposing 48 workspace tools to local LLM agents over
   the Model Context Protocol (Streamable HTTP, Stateless transport) -- workspaces,
   projects, milestones, workflows, subworkflows, features, comments, and personas
   (`mcp.go`, mounted in `main.go` behind `RequireAccount`).
+- Unified partial-update MCP tools `update_feature`, `update_milestone`, `update_workflow`,
+  `update_subworkflow`, plus a partial-safe rewrite of `update_persona`: each accepts any
+  subset of an entity's fields and leaves omitted fields unchanged (pointer/presence
+  semantics, fixing a zero-value clobber bug). They supersede the single-field
+  `rename_feature` / `set_*_color` / `set_*_status` / `move_feature` tools, which remain
+  for compatibility (`mcp_bulk.go`, `mcp_bulk_structural.go`).
+- Bulk MCP tools that mutate many entities per call (max 100) and return a per-item
+  `{index, ok, id, error}` envelope in input order: `bulk_create_features` / `_milestones` /
+  `_workflows` / `_subworkflows` / `_personas`, `bulk_update_features` / `_milestones` /
+  `_workflows` / `_subworkflows`, `bulk_add_comment`, `bulk_attach_personas` /
+  `bulk_detach_personas`, `bulk_reorder_features`, and `bulk_delete_features` / `_personas`.
+  Each item is isolated by a Postgres SAVEPOINT so one item's failure neither poisons the
+  shared (always-commit) transaction nor aborts its siblings; `bulk_reorder_features` is
+  all-or-nothing and pre-computes the full lexorank chain before any write
+  (`mcp_bulk.go`, `mcp_bulk_structural.go`, `service.go` `ReorderFeatures`,
+  `repo.go` savepoint helpers).
 - `ApiKeysSection` panel on the account page with one-shot plaintext reveal,
   copy-to-clipboard, and revoke (`webapp/src/components/ApiKeysSection.tsx`).
 - `.dockerignore` keeping secrets (`conf.json`, `.env`, `.mcp.json`) and regenerated
