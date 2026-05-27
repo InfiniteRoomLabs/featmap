@@ -39,6 +39,13 @@ Entries below cover fork-local changes; upstream history is in the git log.
   copy-to-clipboard, and revoke (`webapp/src/components/ApiKeysSection.tsx`).
 - `.dockerignore` keeping secrets (`conf.json`, `.env`, `.mcp.json`) and regenerated
   artifacts (`node_modules`, `bindata.go`, `webapp/build`) out of the build context.
+- GitHub Actions CI (`.github/workflows/ci.yml`, SHA-pinned actions, least-privilege
+  `contents: read`): a DB-free `lint` job (build, vet, MCP registration guard, deadcode)
+  and a `test` job (full suite via testcontainers Postgres). Plus `mcp_registration_test.go`
+  -- a stdlib `go/ast` test asserting every `mcp*` tool handler is wired via `add()` with no
+  orphans or duplicate tool names (the check that would have caught the unregistered
+  `bulk_add_comment`) -- and `scripts/deadcode-check.sh`, which gates *new* unreachable code
+  against `.github/deadcode-baseline.txt` (pinned `deadcode@v0.45.0`).
 
 ### Changed
 - Rewrote `Dockerfile` as a digest-pinned multi-stage build (pnpm + `--frozen-lockfile`,

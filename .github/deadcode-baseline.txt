@@ -1,0 +1,6 @@
+mware.go: RequireTrialOrPro
+response.go: Response.AddMessage
+response.go: Response.AddData
+response.go: Response.JSON
+subscription-api.go: postChangeSubscriptionRequest.Bind
+users-api.go: ContactRequest.Bind
