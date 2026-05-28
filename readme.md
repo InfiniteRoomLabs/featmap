@@ -174,11 +174,11 @@ Most MCP clients (Claude Desktop, Claude Code, Cursor, etc.) accept a JSON confi
 
 ### Available tools
 
-48 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
+50 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
 
 | Group | Tools |
 |---|---|
-| Discovery | `list_workspaces`, `list_projects`, `get_board` |
+| Discovery | `list_workspaces`, `list_projects`, `get_board`, `get_feature`, `query_board` |
 | Project | `create_project` |
 | Milestone | `create_milestone`, `update_milestone`, `move_milestone`, `set_milestone_color`, `set_milestone_status` |
 | Workflow | `create_workflow`, `update_workflow`, `move_workflow`, `set_workflow_color`, `set_workflow_status` |
@@ -197,6 +197,20 @@ Status tools accept `OPEN` or `CLOSED`. Color tools accept any of: `WHITE`, `GRE
 The `bulk_*` tools take an `items` array (max 100) and return `{ "results": [ { "index", "ok", "id", "error" } ] }`, one entry per input item in order. Items are best-effort and isolated by per-item savepoints: a failing item reports its error in its own slot without aborting the others or the surrounding transaction.
 
 `bulk_reorder_features` is the exception -- it is all-or-nothing and must list **every** feature in the target `(milestone, subworkflow)` cell exactly once (a count mismatch, non-member, or duplicate rejects the whole call with no writes); the server assigns the lexorank chain so the cell ends in exactly the given order.
+
+### Scoped reads
+
+`get_board` returns the entire project, which can be hundreds of KB on a large board. Two scoped-read tools let an agent read a slice without that dump:
+
+- `get_feature(workspace_id, feature_id, include_comments?)` -- read ONE card by id (full title, description, color, status, placement). Set `include_comments=true` to also get its comments (oldest first). Typed and schema-validated; the reliable single-card drill path.
+- `query_board(workspace_id, project_id, filter)` -- run a jq (gojq) program over the full board JSON server-side and get back only the matched values wrapped as `{ "results": [...] }`. The board is built in memory, the filter runs over it, and only the transformed result is returned. The `filter` is required; an empty filter errors (use `get_board` for the whole board). A malformed filter returns a clean parse error. Because the caller controls the output shape via jq, `query_board`'s inner result is not schema-validated (the `{results}` envelope is). gojq is a full jq implementation; its regex uses Go RE2 (no lookaround/backreferences).
+
+Example -- list every `SYNC-*` card as lightweight stubs instead of fetching the board:
+
+```
+query_board(workspace_id=..., project_id=...,
+  filter='.features[] | select(.title | startswith("SYNC-")) | {id, title, status, color}')
+```
 
 ### Recipe: bootstrap a board from zero
 

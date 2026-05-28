@@ -56,7 +56,8 @@ All Go files live in the repo root as a single package. Layering is by file, not
 - `main.go` -- chi router wiring, config load, migration runner, JWT auth init, static asset serving
 - `mware.go` -- middleware stack (`ContextSkeleton`, `Transaction`, `Auth`, `User`) + `RequireAccount`/`RequireMember`/`RequireAdmin`/`RequireOwner`/`RequireSubscription` guards
 - `*-api.go` -- HTTP handlers grouped by domain (`users-api`, `account-api`, `workspace-api`, `subscription-api`, `link-api`). `account-api.go` also carries the API-key CRUD (`GET/POST/DELETE /v1/account/apikeys`)
-- `mcp.go` -- Streamable HTTP MCP server (48 tools) + helpers. Tool handlers are package-level `mcpFoo` funcs wired via `buildMCPServer()`; `withService` centralises bearer auth + `resolveWorkspace`. See the MCP section below
+- `mcp.go` -- Streamable HTTP MCP server (50 tools) + helpers. Tool handlers are package-level `mcpFoo` funcs wired via `buildMCPServer()`; `withService` centralises bearer auth + `resolveWorkspace`. See the MCP section below
+- `mcp_reads.go` -- scoped-read tools: `get_feature` (typed single-card read, optional comments) and `query_board` (a gojq filter/projection over the full board, returning matched values as `{results:[...]}` so an agent can read a slice without the whole-board dump). `runBoardFilter` marshals the board to generic JSON, compiles+runs the jq program (`github.com/itchyny/gojq`) with the request context forwarded for cancellation, and never panics on a bad filter
 - `mcp_bulk.go` -- bulk + unified-partial feature tools (`update_feature`, `bulk_create_features`, `bulk_update_features`) layered on the single-entity tools. Bulk loops run via `runBulkTx`, which wraps each item in a Postgres SAVEPOINT so a per-item failure rolls back its own slot instead of poisoning the shared always-commit transaction (see the Transaction gotcha below)
 - `mcp_bulk_structural.go` -- partial-update tools for structural entities (`update_milestone`/`update_workflow`/`update_subworkflow`, and the pointer-field rewrite of `update_persona`) plus the rest of the bulk surface (`bulk_add_comment`, `bulk_create_*`, `bulk_attach_personas`/`bulk_detach_personas`, `bulk_update_*`, `bulk_reorder_features`, `bulk_delete_*`). `bulk_reorder_features` is all-or-nothing via the `ReorderFeatures` service method, which pre-computes the full lexorank chain before any write and requires the complete cell
 - `service.go` -- business logic, `Service` interface (huge -- ~50KB). All handler logic calls into the service via `GetEnv(r).Service`
@@ -120,7 +121,7 @@ CORS allowlist is `appSiteURL` + `http://localhost:3000` (hardcoded for CRA dev 
 
 ## MCP Server & API Keys
 
-Fork-local addition (commit `d71173a`). Featmap exposes most of its workspace API as a **Model Context Protocol** server so local LLM agents can drive boards. End-user docs (full 48-tool table, color/status enums, bootstrap recipe) live in `readme.md` -- this section is the dev/architecture view.
+Fork-local addition (commit `d71173a`). Featmap exposes most of its workspace API as a **Model Context Protocol** server so local LLM agents can drive boards. End-user docs (full 50-tool table, color/status enums, bootstrap recipe) live in `readme.md` -- this section is the dev/architecture view.
 
 ### How auth works
 

@@ -15,7 +15,7 @@ Entries below cover fork-local changes; upstream history is in the git log.
   managed from the Account settings page. Keys are UUID v4, SHA-256 hashed at rest
   with an 8-char display prefix, and shown in plaintext exactly once at creation
   (`migrations/23_api_keys.up.sql`, `account-api.go`, `model.go`/`repo.go`/`service.go`).
-- Built-in MCP server at `/mcp` exposing 48 workspace tools to local LLM agents over
+- Built-in MCP server at `/mcp` exposing 50 workspace tools to local LLM agents over
   the Model Context Protocol (Streamable HTTP, Stateless transport) -- workspaces,
   projects, milestones, workflows, subworkflows, features, comments, and personas
   (`mcp.go`, mounted in `main.go` behind `RequireAccount`).
@@ -46,6 +46,15 @@ Entries below cover fork-local changes; upstream history is in the git log.
   orphans or duplicate tool names (the check that would have caught the unregistered
   `bulk_add_comment`) -- and `scripts/deadcode-check.sh`, which gates *new* unreachable code
   against `.github/deadcode-baseline.txt` (pinned `deadcode@v0.45.0`).
+
+- Scoped MCP read tools so agents can read a board slice without the full-board
+  dump: `get_feature` (one card by id, typed/schema-validated, optional
+  `include_comments`) and `query_board` (a jq/gojq filter+projection over the
+  board, returning matched values as `{results:[...]}`). `get_board` is
+  unchanged. gojq runs server-side with the request context forwarded for
+  cancellation; malformed filters return a clean parse error and never panic
+  (`mcp_reads.go`, `repo.go` `FindFeatureCommentsByFeatureID`, `service.go`
+  `GetFeature`/`GetFeatureCommentsByFeature`, new dep `github.com/itchyny/gojq`).
 
 ### Changed
 - Rewrote `Dockerfile` as a digest-pinned multi-stage build (pnpm + `--frozen-lockfile`,
