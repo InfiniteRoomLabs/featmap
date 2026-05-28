@@ -55,6 +55,11 @@ Entries below cover fork-local changes; upstream history is in the git log.
   cancellation; malformed filters return a clean parse error and never panic
   (`mcp_reads.go`, `repo.go` `FindFeatureCommentsByFeatureID`, `service.go`
   `GetFeature`/`GetFeatureCommentsByFeature`, new dep `github.com/itchyny/gojq`).
+  `query_board` returns its `{results:...}` via an `any` handler type so the SDK
+  emits no output schema -- a typed `any` field would emit a boolean subschema
+  (`"results": true`) that strict MCP clients reject, aborting the entire
+  tools/list. `TestMCPOutputSchemasAreClientSafe` connects an in-memory client to
+  the real server and guards against any tool reintroducing that class.
 
 ### Changed
 - Rewrote `Dockerfile` as a digest-pinned multi-stage build (pnpm + `--frozen-lockfile`,

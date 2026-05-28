@@ -64,14 +64,23 @@ type queryBoardArgs struct {
 	Filter      string `json:"filter" jsonschema:"REQUIRED jq program; see description"`
 }
 
-// queryBoardResult wraps arbitrary jq output. Results is `any` so the SDK derives
-// a permissive schema -- the {results:...} envelope validates, the inner content
-// is unconstrained (caller-controlled projection).
+// queryBoardResult wraps arbitrary jq output as {"results":[...]}.
+//
+// mcpQueryBoard returns this as a static `any`, NOT as a concrete type. That is
+// deliberate and load-bearing: the go-sdk derives an output schema from the
+// handler's return type, and for a field of type `any` it emits the boolean
+// subschema `"results": true`. JSON Schema 2020-12 permits boolean subschemas,
+// but the MCP client's schema validator rejects them ("Invalid input"), which
+// aborts the ENTIRE tools/list -- every featmap tool disappears, not just this
+// one. Returning `any` makes the sdk emit NO output schema at all (it only
+// derives one when the static Out type differs from `any`), which is exactly
+// right here: the caller controls the output shape via jq, so there is nothing
+// stable to validate. The {results:...} envelope is still produced at runtime.
 type queryBoardResult struct {
 	Results any `json:"results"`
 }
 
-func mcpQueryBoard(ctx context.Context, s Service, a queryBoardArgs) (*queryBoardResult, error) {
+func mcpQueryBoard(ctx context.Context, s Service, a queryBoardArgs) (any, error) {
 	if strings.TrimSpace(a.Filter) == "" {
 		return nil, errors.New("filter is required (use get_board for the full untyped board)")
 	}
@@ -93,7 +102,7 @@ func mcpQueryBoard(ctx context.Context, s Service, a queryBoardArgs) (*queryBoar
 	if err != nil {
 		return nil, err
 	}
-	return &queryBoardResult{Results: out}, nil
+	return queryBoardResult{Results: out}, nil
 }
 
 // runBoardFilter marshals the board to generic JSON, compiles the jq program,

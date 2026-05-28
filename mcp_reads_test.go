@@ -54,10 +54,7 @@ func Test_mcpQueryBoard(t *testing.T) {
 			Filter: `.features[] | select(.title | startswith("F-M1-")) | {id, title}`,
 		})
 		mustOK(t, err, "mcpQueryBoard projection")
-		got, ok := res.Results.([]any)
-		if !ok {
-			t.Fatalf("expected []any results, got %T", res.Results)
-		}
+		got := qbResults(t, res)
 		if len(got) != 3 { // M1 x {SW1,SW2,SW3}
 			t.Fatalf("expected 3 M1 features, got %d", len(got))
 		}
@@ -68,7 +65,7 @@ func Test_mcpQueryBoard(t *testing.T) {
 			Filter: `.features[] | select(.id == "` + fx.Features[0].ID + `")`,
 		})
 		mustOK(t, err, "mcpQueryBoard single")
-		if oneGot := one.Results.([]any); len(oneGot) != 1 {
+		if oneGot := qbResults(t, one); len(oneGot) != 1 {
 			t.Fatalf("expected 1 feature, got %d", len(oneGot))
 		}
 
@@ -78,7 +75,7 @@ func Test_mcpQueryBoard(t *testing.T) {
 			Filter: `.features[] | select(.title == "nonexistent-___")`,
 		})
 		mustOK(t, err, "mcpQueryBoard no-match")
-		if got := noMatch.Results.([]any); len(got) != 0 {
+		if got := qbResults(t, noMatch); len(got) != 0 {
 			t.Fatalf("expected empty results, got %d", len(got))
 		}
 
@@ -104,4 +101,21 @@ func Test_mcpQueryBoard(t *testing.T) {
 			t.Fatalf("expected project not found error")
 		}
 	})
+}
+
+// qbResults unwraps mcpQueryBoard's `any` return into the []any under
+// "results", asserting the {results:[...]} envelope shape along the way.
+// mcpQueryBoard returns `any` (not a concrete type) on purpose -- see the
+// queryBoardResult doc comment -- so callers must type-assert.
+func qbResults(t *testing.T, v any) []any {
+	t.Helper()
+	r, ok := v.(queryBoardResult)
+	if !ok {
+		t.Fatalf("expected queryBoardResult, got %T", v)
+	}
+	rs, ok := r.Results.([]any)
+	if !ok {
+		t.Fatalf("expected results []any, got %T", r.Results)
+	}
+	return rs
 }
