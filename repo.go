@@ -87,6 +87,7 @@ type Repository interface {
 
 	GetFeatureComment(workspaceID string, ID string) (*FeatureComment, error)
 	FindFeatureCommentsByProject(workspaceID string, projectID string) ([]*FeatureComment, error)
+	FindFeatureCommentsByFeatureID(workspaceID string, featureID string) ([]*FeatureComment, error)
 	StoreFeatureComment(x *FeatureComment)
 	DeleteFeatureComment(workspaceID string, commentID string)
 
@@ -580,6 +581,17 @@ func (a *repo) FindFeatureCommentsByProject(workspaceID string, projectID string
 func (a *repo) FindFeatureCommentsByFeature(workspaceID string, ID string) (*FeatureComment, error) {
 	x := &FeatureComment{}
 	if err := a.tx.Get(x, "SELECT * FROM feature_comments WHERE workspace_id = $1 AND feature_id = $2", workspaceID, ID); err != nil {
+		return nil, errors.Wrap(err, "not found")
+	}
+	return x, nil
+}
+
+// FindFeatureCommentsByFeatureID returns ALL comments on one feature, oldest
+// first. (Distinct from FindFeatureCommentsByFeature, which .Get's a single row.)
+func (a *repo) FindFeatureCommentsByFeatureID(workspaceID string, featureID string) ([]*FeatureComment, error) {
+	x := []*FeatureComment{}
+	err := a.tx.Select(&x, "SELECT * FROM feature_comments WHERE workspace_id = $1 AND feature_id = $2 ORDER BY created_at", workspaceID, featureID)
+	if err != nil {
 		return nil, errors.Wrap(err, "not found")
 	}
 	return x, nil
