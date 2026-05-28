@@ -43,6 +43,8 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.0 // indirect
+	github.com/itchyny/gojq v0.12.17 // indirect
+	github.com/itchyny/timefmt-go v0.1.6 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
