@@ -30,6 +30,10 @@ func Test_mcpGetFeature(t *testing.T) {
 		if len(res2.Comments) != 1 {
 			t.Fatalf("expected 1 comment, got %d", len(res2.Comments))
 		}
+		// MemberID must be populated (owner join), consistent with get_board.
+		if res2.Comments[0].MemberID != member.ID {
+			t.Fatalf("expected comment MemberID %s, got %q", member.ID, res2.Comments[0].MemberID)
+		}
 
 		// Unknown id -> clean error, no panic.
 		if _, err := mcpGetFeature(ctx, s, getFeatureArgs{

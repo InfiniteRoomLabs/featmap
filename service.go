@@ -1904,6 +1904,14 @@ func (s *service) GetFeatureCommentsByFeature(featureID string) []*FeatureCommen
 	if err != nil {
 		log.Println(err)
 	}
+	// Populate MemberID per comment (db:"-" field), matching what
+	// GetFeatureCommentsByProject does via its owner join, so include_comments
+	// output is consistent with get_board.
+	for _, c := range cc {
+		if o, oerr := s.r.GetFeatureCommentOwnerByFeatureComment(s.Member.WorkspaceID, c.ID); oerr == nil && o != nil {
+			c.MemberID = o.MemberID
+		}
+	}
 	return cc
 }
 
