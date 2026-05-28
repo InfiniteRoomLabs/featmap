@@ -34,18 +34,31 @@ Non-goals (explicitly out of scope -- next epic, not this one):
   `get_board` only -- the one bloated read).
 - Any UI, migration, or schema change.
 
-## Approach (chosen: jq filter + typed drill)
+## Approach (chosen: jq query tool + typed drill)
 
-Two changes to the MCP read surface:
+Two NEW tools on the MCP read surface; `get_board` is left untouched.
 
-### 1. `get_board` gains an optional `filter` param (gojq)
+> **Refinement (SDK-driven, post-approval):** the original sketch modified
+> `get_board` to take an optional `filter`. The go-sdk v1.6.0 handler
+> (`server.go:360-394`) *always* marshals the typed `Out` and validates it
+> against the derived output schema -- there is no clean way for one tool to
+> return both a typed `boardResult` (no filter) and an arbitrary jq shape
+> (filter). Overloading fights the SDK. So filtering lives in a dedicated
+> `query_board` tool whose `Out` is a permissive envelope, and `get_board`
+> stays fully typed and unchanged. Same goal, cleaner mechanism.
 
-- **No `filter`** -> behaves exactly as today: returns the full typed
-  `boardResult`, output-schema-validated. Existing callers are unaffected
-  (back-compat = the default path is unchanged).
-- **`filter` present** -> the server builds the full `boardResult` in memory
-  (cheap for a local Postgres + Go binary), runs the gojq expression over its
-  JSON, and returns the transformed JSON as the tool result.
+### 1. New `query_board` tool (gojq)
+
+- `query_board(workspace_id, project_id, filter)` -- `filter` required.
+- The server builds the full `boardResult` in memory (cheap for a local
+  Postgres + Go binary), marshals it to generic JSON, runs the gojq expression
+  over it, and returns the transformed values wrapped in a stable envelope
+  `{ "results": [...] }`.
+- `Out` type is `queryBoardResult{ Results any }`. The `any` field derives a
+  permissive (`{}`) output schema, so the envelope shape (`{results: ...}`) is
+  advertised and validates, while the inner jq-projected content is arbitrary.
+- For the full untyped/unfiltered board, callers use the existing `get_board`
+  (unchanged). `query_board` is always a filtered/projected read.
 
 Why jq over typed filter params or k8s-style label selectors:
 - Typed filter params only cover scopes we anticipate; they cannot project
@@ -83,18 +96,20 @@ The agent learns the board shape from two sources, belt-and-suspenders:
   `server.go:307`). `get_board`'s unfiltered `boardResult` and `get_feature`'s
   return both advertise their full shape -- field names and types -- to clients
   that read output schemas.
-- **Embedded shape reference + canonical jq recipes in the `filter` param's
-  *description* (the real lever):** the param description is *input* schema,
-  always present in the tool list the model sees. It carries a compact board
-  shape (the key arrays + the fields on a feature stub) and 2-3 worked jq
-  examples (stubs for a prefix, one card's body, a card's comments). The agent
-  reads the shape and a worked example exactly where it writes the filter, so
-  it never has to call unfiltered `get_board` just to discover field names.
+- **Embedded shape reference + canonical jq recipes in `query_board`'s
+  `filter` param *description* (the real lever):** the param description is
+  *input* schema, always present in the tool list the model sees. It carries a
+  compact board shape (the key arrays + the fields on a feature stub) and 2-3
+  worked jq examples (stubs for a prefix, one card's body, a card's comments).
+  The agent reads the shape and a worked example exactly where it writes the
+  filter, so it never has to call unfiltered `get_board` just to discover field
+  names. The result is wrapped `{results: [...]}` -- recipes show the agent the
+  jq runs over the board, and the matched values come back under `results`.
 
 ## Data flow
 
 ```
-Agent                          get_board handler                gojq
+Agent                          query_board handler              gojq
   | filter=".features[]           |                              |
   |   | select(.title            |                              |
   |   | startswith(\"SYNC-\"))    |                              |
@@ -118,25 +133,27 @@ Agent                          get_board handler                gojq
 ## Components / boundaries
 
 - New file `mcp_reads.go` (flat `package main`, per repo convention): holds
-  `mcpGetFeature`, the gojq filtering helper, the `filter`-aware variant of the
-  `get_board` handler, and the embedded shape-reference constant. Keeps the
-  read additions in one focused file rather than growing `mcp.go`.
-- `mcp.go`: register `get_feature`; update `get_board`'s args struct + handler
-  wiring to accept `filter`. Both registrations go through the existing
-  `add()` helper so `TestMCPRegistrationCompleteness` covers them.
-- `repo.go`: add `GetFeatureCommentsByFeature`.
-- `service.go`: add the service-layer passthrough for the new repo method +
-  the get_feature path (workspace-scoped, same pattern as existing getters).
+  `mcpGetFeature`, `mcpQueryBoard`, the gojq filtering helper, the arg/result
+  structs, and the embedded shape-reference/recipes constant. Keeps the read
+  additions in one focused file rather than growing `mcp.go`.
+- `mcp.go`: register `get_feature` and `query_board` via the existing `add()`
+  helper so `TestMCPRegistrationCompleteness` covers them. `get_board` is not
+  touched.
+- `repo.go`: add `FindFeatureCommentsByFeatureID` (multi-row; the existing
+  `FindFeatureCommentsByFeature` returns only a single row and is unsuitable).
+- `service.go`: add `GetFeature(id)` and `GetFeatureCommentsByFeature(id)`
+  service methods (workspace-scoped via `s.Member.WorkspaceID`, same pattern as
+  existing getters) + their `Service` interface decls.
 
 ## Return-shape constraint (accepted trade-off)
 
-When `filter` is passed, the output is whatever jq produces -- an arbitrary
-shape -- so it cannot ride back through the typed `boardResult` `Out` (the SDK
-validates `Out` against the declared output schema and would reject a
-non-matching shape). The filtered result is therefore returned as raw JSON
-text content, and output-schema validation is lost **only** on the filtered
-path. This is inherent to any caller-controlled projection (jq / GraphQL /
-SQL SELECT) and is acceptable.
+`query_board`'s jq output is an arbitrary shape, so it rides back inside the
+permissive `queryBoardResult{ Results any }` envelope: the `{results: ...}`
+wrapper is schema-validated, but the inner `results` content is unconstrained
+(the `any` field derives a `{}` schema that accepts anything). Output-schema
+validation of the *inner* content is thus given up on `query_board` -- inherent
+to any caller-controlled projection (jq / GraphQL / SQL SELECT) and acceptable.
+`get_board` and `get_feature` keep full typed validation.
 
 What we still guarantee:
 - The board fed *into* jq is the type-safe `boardResult` built server-side
@@ -147,8 +164,9 @@ What we still guarantee:
 
 ## Error handling
 
-- Empty/whitespace `filter` -> treated as absent (full board).
-- Filter fails to compile -> return a clear error naming the parse failure;
+- Empty/whitespace `filter` on `query_board` -> error "filter is required"
+  (for the full board, use `get_board`); no board built.
+- Filter fails to parse/compile -> return a clear error naming the failure;
   no board data leaked.
 - Filter compiles but errors at runtime (e.g. type error mid-expression) ->
   surface the gojq runtime error via the returned `error`; never panic.
@@ -163,10 +181,10 @@ What we still guarantee:
 
 - `get_feature`: returns the right card; `include_comments` toggles the
   comments array; unknown id errors cleanly; wrong-workspace id is denied.
-- `get_board` no-filter: unchanged full board (regression guard).
-- `get_board` with filter: a prefix-select-project filter returns only the
-  expected stubs; a single-id select returns one card; a malformed filter
-  returns a parse error and no data; an empty filter == no filter.
+- `query_board`: a prefix-select-project filter returns only the expected
+  stubs under `results`; a single-id select returns one card; a malformed
+  filter returns a parse error and no data; an empty filter returns the
+  "filter is required" error.
 - `TestMCPRegistrationCompleteness` (existing) must stay green -- both new
   handlers registered, no orphans, no duplicate tool names.
 - Tests run against real Postgres (testcontainers), per repo convention;
