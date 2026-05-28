@@ -535,6 +535,10 @@ func buildMCPServer() *mcpsdk.Server {
 		"Read ONE feature (card) by id: full title, description, color, status, placement. Set include_comments=true to also get its comments. Use this to drill into a single card cheaply instead of fetching the whole board.",
 		func(a getFeatureArgs) string { return a.WorkspaceID }, mcpGetFeature)
 
+	add(srv, "query_board",
+		"Run a jq filter/projection over a project's full board and get back only the matched values ({results:[...]}). Use this to read a slice (e.g. all SYNC-* cards) or specific fields without fetching the entire board. "+queryBoardFilterDoc,
+		func(a queryBoardArgs) string { return a.WorkspaceID }, mcpQueryBoard)
+
 	add(srv, "create_project",
 		"Create a new project in a workspace. A project owns the entire story map (milestones, workflows, subworkflows, features).",
 		func(a createProjectArgs) string { return a.WorkspaceID }, mcpCreateProject)

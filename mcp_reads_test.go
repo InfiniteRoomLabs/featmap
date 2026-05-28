@@ -39,3 +39,65 @@ func Test_mcpGetFeature(t *testing.T) {
 		}
 	})
 }
+
+func Test_mcpQueryBoard(t *testing.T) {
+	runInTx(t, func(t *testing.T, ctx context.Context, s Service, acc *Account, ws *Workspace, member *Member) {
+		fx := newProjectFixture(t, s)
+
+		// Projection: features in M1, return id+title stubs. Titles are "F-M1-SW1" etc.
+		res, err := mcpQueryBoard(ctx, s, queryBoardArgs{
+			WorkspaceID: ws.ID, ProjectID: fx.Project.ID,
+			Filter: `.features[] | select(.title | startswith("F-M1-")) | {id, title}`,
+		})
+		mustOK(t, err, "mcpQueryBoard projection")
+		got, ok := res.Results.([]any)
+		if !ok {
+			t.Fatalf("expected []any results, got %T", res.Results)
+		}
+		if len(got) != 3 { // M1 x {SW1,SW2,SW3}
+			t.Fatalf("expected 3 M1 features, got %d", len(got))
+		}
+
+		// Single-id select returns exactly one card.
+		one, err := mcpQueryBoard(ctx, s, queryBoardArgs{
+			WorkspaceID: ws.ID, ProjectID: fx.Project.ID,
+			Filter: `.features[] | select(.id == "` + fx.Features[0].ID + `")`,
+		})
+		mustOK(t, err, "mcpQueryBoard single")
+		if oneGot := one.Results.([]any); len(oneGot) != 1 {
+			t.Fatalf("expected 1 feature, got %d", len(oneGot))
+		}
+
+		// No-match filter -> results should be [], not null.
+		noMatch, err := mcpQueryBoard(ctx, s, queryBoardArgs{
+			WorkspaceID: ws.ID, ProjectID: fx.Project.ID,
+			Filter: `.features[] | select(.title == "nonexistent-___")`,
+		})
+		mustOK(t, err, "mcpQueryBoard no-match")
+		if got := noMatch.Results.([]any); len(got) != 0 {
+			t.Fatalf("expected empty results, got %d", len(got))
+		}
+
+		// Malformed filter -> parse error, no data.
+		if _, err := mcpQueryBoard(ctx, s, queryBoardArgs{
+			WorkspaceID: ws.ID, ProjectID: fx.Project.ID,
+			Filter: `.features[ | select(`,
+		}); err == nil {
+			t.Fatalf("expected parse error for malformed filter")
+		}
+
+		// Empty filter -> required error.
+		if _, err := mcpQueryBoard(ctx, s, queryBoardArgs{
+			WorkspaceID: ws.ID, ProjectID: fx.Project.ID, Filter: "   ",
+		}); err == nil {
+			t.Fatalf("expected 'filter is required' error")
+		}
+
+		// Unknown project -> not found.
+		if _, err := mcpQueryBoard(ctx, s, queryBoardArgs{
+			WorkspaceID: ws.ID, ProjectID: newUUID(), Filter: ".project",
+		}); err == nil {
+			t.Fatalf("expected project not found error")
+		}
+	})
+}

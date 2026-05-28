@@ -11,6 +11,7 @@ require (
 	github.com/go-chi/jwtauth v4.0.4+incompatible
 	github.com/go-chi/render v1.0.1
 	github.com/golang-migrate/migrate/v4 v4.13.0
+	github.com/itchyny/gojq v0.12.17
 	github.com/jmoiron/sqlx v1.2.0
 	github.com/modelcontextprotocol/go-sdk v1.6.0
 	github.com/pkg/errors v0.9.1
@@ -43,7 +44,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.0 // indirect
-	github.com/itchyny/gojq v0.12.17 // indirect
 	github.com/itchyny/timefmt-go v0.1.6 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lib/pq v1.10.9 // indirect
