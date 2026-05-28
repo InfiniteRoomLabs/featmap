@@ -531,6 +531,10 @@ func buildMCPServer() *mcpsdk.Server {
 		"Fetch the entire story map for a project: milestones, workflows, subworkflows, features, feature comments, personas, workflow personas.",
 		func(a getBoardArgs) string { return a.WorkspaceID }, mcpGetBoard)
 
+	add(srv, "get_feature",
+		"Read ONE feature (card) by id: full title, description, color, status, placement. Set include_comments=true to also get its comments. Use this to drill into a single card cheaply instead of fetching the whole board.",
+		func(a getFeatureArgs) string { return a.WorkspaceID }, mcpGetFeature)
+
 	add(srv, "create_project",
 		"Create a new project in a workspace. A project owns the entire story map (milestones, workflows, subworkflows, features).",
 		func(a createProjectArgs) string { return a.WorkspaceID }, mcpCreateProject)

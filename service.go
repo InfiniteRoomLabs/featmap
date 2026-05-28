@@ -134,6 +134,8 @@ type Service interface {
 	UpdateAnnotationsOnSubWorkflow(id string, names string) (*SubWorkflow, error)
 
 	GetFeaturesByProject(id string) []*Feature
+	GetFeature(id string) (*Feature, error)
+	GetFeatureCommentsByFeature(featureID string) []*FeatureComment
 	MoveFeature(id string, toMilestoneID string, toSubWorkflowID string, index int) (*Feature, error)
 	ReorderFeatures(milestoneID string, subWorkflowID string, featureIDs []string) ([]*Feature, error)
 	CreateFeatureWithID(id string, subWorkflowID string, milestoneID string, title string) (*Feature, error)
@@ -1891,6 +1893,18 @@ func (s *service) GetFeaturesByProject(id string) []*Feature {
 		log.Println(err)
 	}
 	return pp
+}
+
+func (s *service) GetFeature(id string) (*Feature, error) {
+	return s.r.GetFeature(s.Member.WorkspaceID, id)
+}
+
+func (s *service) GetFeatureCommentsByFeature(featureID string) []*FeatureComment {
+	cc, err := s.r.FindFeatureCommentsByFeatureID(s.Member.WorkspaceID, featureID)
+	if err != nil {
+		log.Println(err)
+	}
+	return cc
 }
 
 func (s *service) UpdateFeatureDescription(id string, d string) (*Feature, error) {
