@@ -111,6 +111,7 @@ type Repository interface {
 	DeletePlaneConnection(workspaceID string, id string)
 	FindPlaneConnections(workspaceID string) ([]*PlaneConnection, error)
 	FindAllPlaneConnections() ([]*PlaneConnection, error)
+	GetMemberByWorkspaceFirst(workspaceID string) (*Member, error)
 
 	GetPlaneLink(workspaceID string, id string) (*PlaneLink, error)
 	GetPlaneLinkByFeature(workspaceID string, featureID string) (*PlaneLink, error)
@@ -764,6 +765,14 @@ func (a *repo) FindPlaneConnections(workspaceID string) ([]*PlaneConnection, err
 func (a *repo) FindAllPlaneConnections() ([]*PlaneConnection, error) {
 	x := []*PlaneConnection{}
 	if err := a.tx.Select(&x, "SELECT * FROM plane_connections"); err != nil {
+		return nil, errors.Wrap(err, "not found")
+	}
+	return x, nil
+}
+
+func (a *repo) GetMemberByWorkspaceFirst(workspaceID string) (*Member, error) {
+	x := &Member{}
+	if err := a.tx.Get(x, "SELECT * FROM members WHERE workspace_id=$1 ORDER BY created_at LIMIT 1", workspaceID); err != nil {
 		return nil, errors.Wrap(err, "not found")
 	}
 	return x, nil

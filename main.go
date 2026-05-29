@@ -101,6 +101,8 @@ func main() {
 
 	m.Up()
 
+	startPlanePoller(db, config)
+
 	// Create JWTAuth object
 	auth := jwtauth.New("HS256", []byte(config.JWTSecret), nil)
 
