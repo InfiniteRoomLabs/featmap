@@ -71,7 +71,7 @@ func Test_PlaneClient_listComments_paginates(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &PlaneClient{BaseURL: srv.URL, APIKey: "k", PlaneWorkspace: "ws", HTTP: srv.Client()}
+	c := &PlaneClient{BaseURL: srv.URL, APIKey: "k", PlaneWorkspace: "ws", HTTP: srv.Client(), AllowPrivate: true}
 	comments, err := c.ListComments(context.Background(), "proj", "wi")
 	if err != nil {
 		t.Fatalf("ListComments: %v", err)
@@ -95,7 +95,7 @@ func Test_PlaneClient_createComment(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &PlaneClient{BaseURL: srv.URL, APIKey: "k", PlaneWorkspace: "ws", HTTP: srv.Client()}
+	c := &PlaneClient{BaseURL: srv.URL, APIKey: "k", PlaneWorkspace: "ws", HTTP: srv.Client(), AllowPrivate: true}
 	cm, err := c.CreateComment(context.Background(), "proj", "wi", "<p>hi</p>")
 	if err != nil {
 		t.Fatalf("CreateComment: %v", err)
@@ -110,8 +110,47 @@ func Test_PlaneClient_testConnection_401(t *testing.T) {
 		w.WriteHeader(401)
 	}))
 	defer srv.Close()
-	c := &PlaneClient{BaseURL: srv.URL, APIKey: "bad", HTTP: srv.Client()}
+	c := &PlaneClient{BaseURL: srv.URL, APIKey: "bad", HTTP: srv.Client(), AllowPrivate: true}
 	if err := c.TestConnection(context.Background()); err == nil {
 		t.Fatal("expected 401 error from TestConnection")
+	}
+}
+
+func Test_validatePlaneBaseURL_SSRF(t *testing.T) {
+	// Blocked when allowPrivate=false: loopback, cloud metadata (link-local),
+	// RFC1918, unspecified, and non-http schemes.
+	blocked := []string{
+		"http://127.0.0.1",
+		"http://localhost",                         // resolves to loopback
+		"http://169.254.169.254/latest/meta-data/", // cloud metadata
+		"http://10.0.0.5",
+		"http://192.168.1.1:8080",
+		"http://0.0.0.0",
+		"file:///etc/passwd",
+		"ftp://example.com",
+		"://nohost",
+	}
+	for _, u := range blocked {
+		if err := validatePlaneBaseURL(u, false); err == nil {
+			t.Errorf("expected %q to be rejected with allowPrivate=false", u)
+		}
+	}
+
+	// Public hosts allowed.
+	for _, u := range []string{"https://api.plane.so", "https://8.8.8.8"} {
+		if err := validatePlaneBaseURL(u, false); err != nil {
+			t.Errorf("expected %q to be allowed, got %v", u, err)
+		}
+	}
+
+	// allowPrivate=true is the operator opt-in: private/loopback permitted.
+	for _, u := range []string{"http://127.0.0.1", "http://10.0.0.5"} {
+		if err := validatePlaneBaseURL(u, true); err != nil {
+			t.Errorf("expected %q allowed with allowPrivate=true, got %v", u, err)
+		}
+	}
+	// ...but scheme is still enforced even with allowPrivate=true.
+	if err := validatePlaneBaseURL("file:///etc/passwd", true); err == nil {
+		t.Error("expected non-http scheme rejected even with allowPrivate=true")
 	}
 }

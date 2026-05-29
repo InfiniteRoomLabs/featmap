@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -15,7 +16,7 @@ import (
 func Test_SetGetPlaneConnection_encrypts(t *testing.T) {
 	runInTx(t, func(t *testing.T, ctx context.Context, s Service, acc *Account, ws *Workspace, member *Member) {
 		// service config must carry an encryption key for this test
-		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
 		fx := newProjectFixture(t, s)
 
 		conn, err := s.SetPlaneConnection(fx.Project.ID, "https://api.plane.so", "ws-slug", "secret_key_1234", "p1,p2")
@@ -37,7 +38,7 @@ func Test_SetGetPlaneConnection_encrypts(t *testing.T) {
 
 func Test_LinkUnlinkFeature(t *testing.T) {
 	runInTx(t, func(t *testing.T, ctx context.Context, s Service, acc *Account, ws *Workspace, member *Member) {
-		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
 		fx := newProjectFixture(t, s)
 		feat := fx.Features[0]
 
@@ -101,7 +102,7 @@ func (f *fakePlane) seedRemote(html string) {
 
 func Test_SyncLink_noEcho_and_pull(t *testing.T) {
 	runInTx(t, func(t *testing.T, ctx context.Context, s Service, acc *Account, ws *Workspace, member *Member) {
-		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
 		fx := newProjectFixture(t, s)
 		feat := fx.Features[1] // a feature with no seeded comment
 
@@ -121,7 +122,7 @@ func Test_SyncLink_noEcho_and_pull(t *testing.T) {
 		mustOK(t, err, "local comment")
 
 		// first sync: push 1, pull sees its own push -> must NOT re-import (echo)
-		pushed, pulled, err := s.SyncLink(link)
+		pushed, pulled, err := s.SyncLink(ctx, link)
 		mustOK(t, err, "sync 1")
 		if pushed != 1 {
 			t.Fatalf("expected 1 pushed, got %d", pushed)
@@ -132,7 +133,7 @@ func Test_SyncLink_noEcho_and_pull(t *testing.T) {
 
 		// a genuine remote comment appears
 		fp.seedRemote("<p>from plane</p>")
-		pushed2, pulled2, err := s.SyncLink(link)
+		pushed2, pulled2, err := s.SyncLink(ctx, link)
 		mustOK(t, err, "sync 2")
 		if pushed2 != 0 {
 			t.Fatalf("nothing new to push, got %d", pushed2)
@@ -142,7 +143,7 @@ func Test_SyncLink_noEcho_and_pull(t *testing.T) {
 		}
 
 		// idempotency: a third run changes nothing
-		p3, q3, err := s.SyncLink(link)
+		p3, q3, err := s.SyncLink(ctx, link)
 		mustOK(t, err, "sync 3")
 		if p3 != 0 || q3 != 0 {
 			t.Fatalf("third run not idempotent: pushed=%d pulled=%d", p3, q3)
@@ -175,7 +176,7 @@ func newFakePlaneFailingWorkItem(failWorkItemID string) *httptest.Server {
 // rows back from the DB, not just the in-memory SyncResult).
 func Test_SyncProject_perLinkStatus(t *testing.T) {
 	runInTx(t, func(t *testing.T, ctx context.Context, s Service, acc *Account, ws *Workspace, member *Member) {
-		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
 		fx := newProjectFixture(t, s)
 		okFeat := fx.Features[1]   // healthy link
 		failFeat := fx.Features[2] // link whose remote fetch 500s
@@ -191,7 +192,7 @@ func Test_SyncProject_perLinkStatus(t *testing.T) {
 		failLink, err := s.LinkFeatureToPlane(failFeat.ID, "pp", "wi-fail")
 		mustOK(t, err, "link fail")
 
-		res, err := s.SyncProject(fx.Project.ID)
+		res, err := s.SyncProject(ctx, fx.Project.ID)
 		mustOK(t, err, "SyncProject") // SyncProject itself does not surface per-link errors
 		if len(res.PerLink) != 2 {
 			t.Fatalf("expected 2 per-link results, got %d", len(res.PerLink))
@@ -238,6 +239,64 @@ func Test_SyncProject_perLinkStatus(t *testing.T) {
 		}
 		if gotFail.LastSyncedAt == nil {
 			t.Fatal("persisted fail link LastSyncedAt not set")
+		}
+	})
+}
+
+// Test_SyncLink_pushError_continues is the regression guard for the critical
+// bug where a single failed push aborted the whole batch AND the pull phase.
+// A fake Plane rejects (422) any comment whose body contains "REJECT" but
+// accepts others. With local comments [ok1, REJECT-me, ok2] and a remote
+// comment present, one bad push must NOT stop the other pushes or the pull.
+func Test_SyncLink_pushError_continues(t *testing.T) {
+	runInTx(t, func(t *testing.T, ctx context.Context, s Service, acc *Account, ws *Workspace, member *Member) {
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
+		fx := newProjectFixture(t, s)
+		feat := fx.Features[3] // a feature with no seeded comment
+
+		var seq int
+		remote := []PlaneComment{{ID: "remote-1", CommentHTML: "<p>from plane</p>", UpdatedAt: time.Now().UTC(), Actor: "remote"}}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPost {
+				body, _ := io.ReadAll(r.Body)
+				if strings.Contains(string(body), "REJECT") {
+					w.WriteHeader(422) // Plane rejects this one comment
+					return
+				}
+				seq++
+				cm := PlaneComment{ID: "pushed-" + strconv.Itoa(seq), CommentHTML: "<p>ok</p>", UpdatedAt: time.Now().UTC(), Actor: "me"}
+				b, _ := json.Marshal(cm)
+				_, _ = w.Write(b)
+				return
+			}
+			b, _ := json.Marshal(planeCommentList{Results: remote, NextPageResults: false})
+			_, _ = w.Write(b)
+		}))
+		defer srv.Close()
+
+		_, err := s.SetPlaneConnection(fx.Project.ID, srv.URL, "ws", "key", "")
+		mustOK(t, err, "SetPlaneConnection")
+		link, err := s.LinkFeatureToPlane(feat.ID, "pp", "wi")
+		mustOK(t, err, "link")
+
+		// order matters: bad comment in the MIDDLE, so we prove later ones still push
+		_, err = s.CreateFeatureCommentWithID(newUUID(), feat.ID, "ok one")
+		mustOK(t, err, "c1")
+		_, err = s.CreateFeatureCommentWithID(newUUID(), feat.ID, "please REJECT this")
+		mustOK(t, err, "c2")
+		_, err = s.CreateFeatureCommentWithID(newUUID(), feat.ID, "ok two")
+		mustOK(t, err, "c3")
+
+		pushed, pulled, serr := s.SyncLink(ctx, link)
+		if serr == nil {
+			t.Fatal("expected the rejected comment to surface an error")
+		}
+		if pushed != 2 {
+			t.Fatalf("expected 2 good comments pushed despite 1 failure, got %d", pushed)
+		}
+		if pulled != 1 {
+			t.Fatalf("expected pull phase to still run (1 remote), got %d -- push error blocked the pull", pulled)
 		}
 	})
 }

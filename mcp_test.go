@@ -1151,7 +1151,7 @@ func Test_resolveWorkspace(t *testing.T) {
 
 func Test_mcpSetPlaneConnection(t *testing.T) {
 	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
-		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
 		fix := newProjectFixture(t, s)
 
 		t.Run("sad: missing api_key returns error", func(t *testing.T) {
@@ -1186,7 +1186,7 @@ func Test_mcpSetPlaneConnection(t *testing.T) {
 
 func Test_mcpGetPlaneConnection(t *testing.T) {
 	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
-		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
 		fix := newProjectFixture(t, s)
 
 		t.Run("sad: no connection returns error", func(t *testing.T) {
@@ -1218,7 +1218,7 @@ func Test_mcpGetPlaneConnection(t *testing.T) {
 
 func Test_mcpTestPlaneConnection(t *testing.T) {
 	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
-		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
 		fix := newProjectFixture(t, s)
 
 		t.Run("sad: no connection returns error", func(t *testing.T) {
@@ -1253,7 +1253,7 @@ func Test_mcpTestPlaneConnection(t *testing.T) {
 
 func Test_mcpLinkFeatureToPlane(t *testing.T) {
 	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
-		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
 		fix := newProjectFixture(t, s)
 		feat := fix.Features[0]
 
@@ -1288,7 +1288,7 @@ func Test_mcpLinkFeatureToPlane(t *testing.T) {
 
 func Test_mcpUnlinkFeatureFromPlane(t *testing.T) {
 	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
-		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
 		fix := newProjectFixture(t, s)
 		feat := fix.Features[0]
 
@@ -1323,7 +1323,7 @@ func Test_mcpUnlinkFeatureFromPlane(t *testing.T) {
 
 func Test_mcpPlaneSync(t *testing.T) {
 	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
-		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
 		fix := newProjectFixture(t, s)
 		feat := fix.Features[1] // feature with no seeded comment
 

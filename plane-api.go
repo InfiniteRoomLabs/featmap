@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -8,14 +9,32 @@ import (
 	"github.com/go-chi/render"
 )
 
+var errPlaneFeatureIDRequired = errors.New("featureId is required (query feature_id or JSON body)")
+
 // planeAPI mounts under the workspaceAPI group at /v1/projects/{projectID}/plane.
+// The outer workspaceAPI scope already applies RequireAccount + RequireMember;
+// these sub-groups add the role/subscription guards every other mutating route
+// uses, so a VIEWER cannot store credentials, link, or trigger syncs.
 func planeAPI(r chi.Router) {
 	r.Route("/projects/{projectID}/plane", func(r chi.Router) {
-		r.Get("/connection", getPlaneConnection)
-		r.Post("/connection", setPlaneConnection)
-		r.Post("/connection/test", testPlaneConnection)
-		r.Post("/link", linkFeatureToPlane)
-		r.Post("/sync", syncPlaneProject)
+		// Connection management stores encrypted Plane credentials -> admin only
+		// (matches the invite routes' RequireSubscription + RequireAdmin).
+		r.Group(func(r chi.Router) {
+			r.Use(RequireSubscription())
+			r.Use(RequireAdmin())
+			r.Get("/connection", getPlaneConnection)
+			r.Post("/connection", setPlaneConnection)
+			r.Post("/connection/test", testPlaneConnection)
+		})
+		// Link/unlink/sync mutate board<->Plane state -> editor (matches the
+		// feature + feature-comment routes' RequireSubscription + RequireEditor).
+		r.Group(func(r chi.Router) {
+			r.Use(RequireSubscription())
+			r.Use(RequireEditor())
+			r.Post("/link", linkFeatureToPlane)
+			r.Delete("/link", unlinkFeatureFromPlane)
+			r.Post("/sync", syncPlaneProject)
+		})
 	})
 }
 
@@ -84,6 +103,33 @@ func linkFeatureToPlane(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, link)
 }
 
+type unlinkFeatureRequest struct {
+	FeatureID string `json:"featureId"`
+}
+
+func (p *unlinkFeatureRequest) Bind(r *http.Request) error { return nil }
+
+func unlinkFeatureFromPlane(w http.ResponseWriter, r *http.Request) {
+	// Accept featureId from the query string or the JSON body so both curl-style
+	// (`?feature_id=`) and structured callers (the CLI) work.
+	fid := r.URL.Query().Get("feature_id")
+	if fid == "" {
+		data := &unlinkFeatureRequest{}
+		if err := render.Bind(r, data); err == nil {
+			fid = data.FeatureID
+		}
+	}
+	if fid == "" {
+		_ = render.Render(w, r, ErrInvalidRequest(errPlaneFeatureIDRequired))
+		return
+	}
+	if err := GetEnv(r).Service.UnlinkFeatureFromPlane(fid); err != nil {
+		_ = render.Render(w, r, ErrInvalidRequest(err))
+		return
+	}
+	render.JSON(w, r, map[string]bool{"ok": true})
+}
+
 func syncPlaneProject(w http.ResponseWriter, r *http.Request) {
 	pid := chi.URLParam(r, "projectID")
 	if fid := r.URL.Query().Get("feature_id"); fid != "" {
@@ -93,7 +139,7 @@ func syncPlaneProject(w http.ResponseWriter, r *http.Request) {
 			_ = render.Render(w, r, ErrInvalidRequest(err))
 			return
 		}
-		pushed, pulled, serr := svc.SyncLink(link)
+		pushed, pulled, serr := svc.SyncLink(r.Context(), link)
 		now := time.Now().UTC()
 		link.LastSyncedAt = &now
 		if serr != nil {
@@ -109,7 +155,7 @@ func syncPlaneProject(w http.ResponseWriter, r *http.Request) {
 		render.JSON(w, r, SyncResult{Pushed: pushed, Pulled: pulled, PerLink: []LinkSyncResult{{LinkID: link.ID, FeatureID: fid, Status: string(StatusOK), Pushed: pushed, Pulled: pulled}}})
 		return
 	}
-	res, err := GetEnv(r).Service.SyncProject(pid)
+	res, err := GetEnv(r).Service.SyncProject(r.Context(), pid)
 	if err != nil {
 		_ = render.Render(w, r, ErrInvalidRequest(err))
 		return

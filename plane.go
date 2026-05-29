@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -117,16 +118,85 @@ type PlaneClient struct {
 	APIKey         string
 	PlaneWorkspace string // workspace slug
 	HTTP           *http.Client
+	// AllowPrivate disables the SSRF guard's private/loopback/link-local
+	// rejection. Default false. Set only from the operator opt-in conf flag
+	// planeAllowPrivateHosts, for legitimately self-hosted Plane on an internal
+	// address. Never expose this to per-request/user input.
+	AllowPrivate bool
+}
+
+// isBlockedHostIP reports whether an IP must be refused as an SSRF target.
+// Uses stdlib classification: loopback (127/8, ::1), unspecified (0.0.0.0, ::),
+// RFC1918 + ULA fc00::/7 (IsPrivate), and link-local (169.254/16 incl. the
+// 169.254.169.254 cloud-metadata address, and fe80::/10). Multicast too.
+func isBlockedHostIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsUnspecified() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
+// validatePlaneBaseURL rejects URLs that could drive SSRF. It requires an
+// http/https scheme and a host, resolves the host, and (unless allowPrivate)
+// refuses any address that resolves to a loopback/private/link-local range so a
+// workspace member cannot point base_url at cloud metadata or internal services.
+// Called both on write (SetPlaneConnection) and before every request (do), so a
+// DNS-rebinding flip between persist and use is caught at request time.
+func validatePlaneBaseURL(rawURL string, allowPrivate bool) error {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("invalid Plane base URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errors.New("Plane base URL must use http or https")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return errors.New("Plane base URL has no host")
+	}
+	if allowPrivate {
+		return nil
+	}
+	// If the host is a literal IP, classify it directly; otherwise resolve.
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedHostIP(ip) {
+			return fmt.Errorf("Plane base URL host %s is a private/loopback/link-local address (set planeAllowPrivateHosts to allow)", host)
+		}
+		return nil
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("cannot resolve Plane base URL host %q: %w", host, err)
+	}
+	for _, ip := range ips {
+		if isBlockedHostIP(ip) {
+			return fmt.Errorf("Plane base URL host %s resolves to a private/loopback/link-local address %s (set planeAllowPrivateHosts to allow)", host, ip)
+		}
+	}
+	return nil
 }
 
 func (c *PlaneClient) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		// Re-validate every redirect hop so a 302 to a metadata/internal IP is
+		// blocked even though the original BaseURL was public.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			return validatePlaneBaseURL(req.URL.Scheme+"://"+req.URL.Host, c.AllowPrivate)
+		},
+	}
 }
 
 func (c *PlaneClient) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	// Re-validate at request time (defends against DNS rebinding / a base_url
+	// that resolved public on write but flips to an internal IP later).
+	if err := validatePlaneBaseURL(c.BaseURL, c.AllowPrivate); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.BaseURL, "/")+path, body)
 	if err != nil {
 		return nil, err

@@ -194,8 +194,8 @@ type Service interface {
 	GetPlaneLinkByFeature(featureID string) (*PlaneLink, error)
 	FindPlaneLinksByProject(projectID string) ([]*PlaneLink, error)
 
-	SyncProject(projectID string) (*SyncResult, error)
-	SyncLink(link *PlaneLink) (pushed int, pulled int, err error)
+	SyncProject(ctx context.Context, projectID string) (*SyncResult, error)
+	SyncLink(ctx context.Context, link *PlaneLink) (pushed int, pulled int, err error)
 }
 
 type service struct {
@@ -2486,6 +2486,11 @@ func (s *service) GetPlaneConnection(projectID string) (*PlaneConnection, error)
 }
 
 func (s *service) SetPlaneConnection(projectID, baseURL, planeWorkspace, apiKey, watchedProjects string) (*PlaneConnection, error) {
+	// SSRF guard: reject a base URL that targets a private/loopback/link-local
+	// host before we ever store it (re-checked at request time in PlaneClient.do).
+	if err := validatePlaneBaseURL(baseURL, s.config.PlaneAllowPrivateHosts); err != nil {
+		return nil, err
+	}
 	cipher, nonce, err := encryptPlaneKey(s.config.PlaneEncryptionKey, apiKey)
 	if err != nil {
 		return nil, err
@@ -2517,7 +2522,7 @@ func (s *service) planeClientForConnection(conn *PlaneConnection) (*PlaneClient,
 	if err != nil {
 		return nil, err
 	}
-	return &PlaneClient{BaseURL: conn.BaseURL, APIKey: key, PlaneWorkspace: conn.PlaneWorkspace}, nil
+	return &PlaneClient{BaseURL: conn.BaseURL, APIKey: key, PlaneWorkspace: conn.PlaneWorkspace, AllowPrivate: s.config.PlaneAllowPrivateHosts}, nil
 }
 
 func (s *service) TestPlaneConnection(projectID string) error {
@@ -2573,12 +2578,22 @@ func (s *service) UnlinkFeatureFromPlane(featureID string) error {
 }
 
 // SyncLink pushes unmapped local comments to Plane and pulls unmapped Plane
-// comments back, advancing link.LastPulledCursor in memory on a full pull.
-// Caller is responsible for persisting link via StorePlaneLink to save the
-// updated cursor (and LastStatus/LastError); SyncLink itself does not write the
-// link row. SyncProject does this; any other caller (per-link REST endpoint,
-// poller) must do the same or the cursor reverts on the next DB read.
-func (s *service) SyncLink(link *PlaneLink) (int, int, error) {
+// comments back. Correctness rests on dedupe-by-external-id via plane_comment_map
+// (the mappedFeatmap/mappedPlane sets), NOT on link.LastPulledCursor: Plane's
+// comment-list API has no server-side updated_at filter, so the pull always
+// fetches all comments and the map prevents re-import. LastPulledCursor is
+// advanced to the max updated_at seen on a successful pull as informational
+// "freshness" metadata only; it is not (and cannot be) used to bound the fetch.
+//
+// Caller is responsible for persisting link via StorePlaneLink to save
+// LastStatus/LastError (and the cursor metadata); SyncLink does not write the
+// link row. SyncProject does this; any other single-link caller (REST endpoint,
+// MCP tool) must do the same.
+//
+// A per-comment push failure is recorded and SKIPPED (the comment stays unmapped
+// and retries next run), so one bad comment cannot block the rest of the batch
+// or the pull phase; the first such error is returned after both phases run.
+func (s *service) SyncLink(ctx context.Context, link *PlaneLink) (int, int, error) {
 	conn, err := s.r.GetPlaneConnectionByProject(s.Member.WorkspaceID, link.ProjectID)
 	if err != nil {
 		return 0, 0, errors.New("no plane connection for project")
@@ -2605,6 +2620,7 @@ func (s *service) SyncLink(link *PlaneLink) (int, int, error) {
 	}
 
 	pushed := 0
+	var firstPushErr error
 	// PUSH: featmap comments with no (featmap_comment_id -> plane_comment_id) map row.
 	// Read directly via the repo so a transient DB error propagates instead of being
 	// swallowed: GetFeatureCommentsByFeature logs-and-returns-empty, which would make a
@@ -2628,10 +2644,15 @@ func (s *service) SyncLink(link *PlaneLink) (int, int, error) {
 		if originatedFromPlane {
 			continue
 		}
-		pc, perr := client.CreateComment(context.Background(), link.PlaneProjectID, link.PlaneWorkItemID, lc.Post)
+		pc, perr := client.CreateComment(ctx, link.PlaneProjectID, link.PlaneWorkItemID, lc.Post)
 		if perr != nil {
-			// leave unmapped (stays queued); record and continue, never panic
-			return pushed, 0, perr
+			// Leave this comment unmapped so it retries next run; record the first
+			// error and CONTINUE. A single bad comment (e.g. a Plane 422) must not
+			// abort the rest of the batch nor block the pull phase below.
+			if firstPushErr == nil {
+				firstPushErr = perr
+			}
+			continue
 		}
 		pcID := pc.ID
 		fcID := lc.ID
@@ -2645,8 +2666,9 @@ func (s *service) SyncLink(link *PlaneLink) (int, int, error) {
 	}
 
 	pulled := 0
-	// PULL: all plane comments; skip mapped (echo/edit-safe) + watermark optimization.
-	planeComments, perr := client.ListComments(context.Background(), link.PlaneProjectID, link.PlaneWorkItemID)
+	// PULL: fetch all plane comments; the map (mappedPlane) makes this echo- and
+	// edit-safe regardless of cursor (Plane has no server-side updated_at filter).
+	planeComments, perr := client.ListComments(ctx, link.PlaneProjectID, link.PlaneWorkItemID)
 	if perr != nil {
 		return pushed, pulled, perr
 	}
@@ -2672,21 +2694,23 @@ func (s *service) SyncLink(link *PlaneLink) (int, int, error) {
 			maxSeen = ts
 		}
 	}
-	// advance cursor only on full pull success
+	// Pull fully succeeded: advance the informational freshness watermark.
 	if maxSeen > link.LastPulledCursor {
 		link.LastPulledCursor = maxSeen
 	}
-	return pushed, pulled, nil
+	// Surface the first push error (if any) now that the pull phase has run, so
+	// the link is marked errored and the failing comment(s) are retried next run.
+	return pushed, pulled, firstPushErr
 }
 
-func (s *service) SyncProject(projectID string) (*SyncResult, error) {
+func (s *service) SyncProject(ctx context.Context, projectID string) (*SyncResult, error) {
 	links, err := s.r.FindPlaneLinksByProject(s.Member.WorkspaceID, projectID)
 	if err != nil {
 		return nil, err
 	}
 	res := &SyncResult{PerLink: []LinkSyncResult{}}
 	for _, link := range links {
-		pushed, pulled, serr := s.SyncLink(link)
+		pushed, pulled, serr := s.SyncLink(ctx, link)
 		lr := LinkSyncResult{LinkID: link.ID, FeatureID: link.FeatureID, Pushed: pushed, Pulled: pulled}
 		now := time.Now().UTC()
 		link.LastSyncedAt = &now

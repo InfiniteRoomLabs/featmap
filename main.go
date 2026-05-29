@@ -27,23 +27,24 @@ import (
 
 // Configuration ...
 type Configuration struct {
-	Environment         string `json:"environment"`
-	Mode                string `json:"mode"`
-	AppSiteURL          string `json:"appSiteURL"`
-	DbConnectionString  string `json:"dbConnectionString"`
-	JWTSecret           string `json:"jwtSecret"`
-	PlaneEncryptionKey  string `json:"planeEncryptionKey"`
-	PlanePollInterval   string `json:"planePollInterval"`
-	Port                string `json:"port"`
-	EmailFrom           string `json:"emailFrom"`
-	SMTPServer          string `json:"smtpServer"`
-	SMTPPort            string `json:"smtpPort"`
-	SMTPUser            string `json:"smtpUser"`
-	SMTPPass            string `json:"smtpPass"`
-	StripeKey           string `json:"stripeKey"`
-	StripeWebhookSecret string `json:"stripeWebhookSecret"`
-	StripeBasicPlan     string `json:"stripeBasicPlan"`
-	StripeProPlan       string `json:"stripeProPlan"`
+	Environment            string `json:"environment"`
+	Mode                   string `json:"mode"`
+	AppSiteURL             string `json:"appSiteURL"`
+	DbConnectionString     string `json:"dbConnectionString"`
+	JWTSecret              string `json:"jwtSecret"`
+	PlaneEncryptionKey     string `json:"planeEncryptionKey"`
+	PlanePollInterval      string `json:"planePollInterval"`
+	PlaneAllowPrivateHosts bool   `json:"planeAllowPrivateHosts"`
+	Port                   string `json:"port"`
+	EmailFrom              string `json:"emailFrom"`
+	SMTPServer             string `json:"smtpServer"`
+	SMTPPort               string `json:"smtpPort"`
+	SMTPUser               string `json:"smtpUser"`
+	SMTPPass               string `json:"smtpPass"`
+	StripeKey              string `json:"stripeKey"`
+	StripeWebhookSecret    string `json:"stripeWebhookSecret"`
+	StripeBasicPlan        string `json:"stripeBasicPlan"`
+	StripeProPlan          string `json:"stripeProPlan"`
 }
 
 func main() {

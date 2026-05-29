@@ -73,7 +73,7 @@ func mcpPlaneSync(ctx context.Context, s Service, a planeSyncArgs) (*SyncResult,
 		if err != nil {
 			return nil, err
 		}
-		pushed, pulled, serr := s.SyncLink(link)
+		pushed, pulled, serr := s.SyncLink(ctx, link)
 		now := time.Now().UTC()
 		link.LastSyncedAt = &now
 		status := string(StatusOK)
@@ -92,5 +92,5 @@ func mcpPlaneSync(ctx context.Context, s Service, a planeSyncArgs) (*SyncResult,
 			{LinkID: link.ID, FeatureID: a.FeatureID, Status: status, Error: errStr, Pushed: pushed, Pulled: pulled},
 		}}, serr
 	}
-	return s.SyncProject(a.ProjectID)
+	return s.SyncProject(ctx, a.ProjectID)
 }

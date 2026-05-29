@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 )
+
+// pollCycleTimeout bounds the total work of one poll cycle so a slow/large set
+// of links cannot run unbounded. Individual Plane requests are already capped by
+// the PlaneClient's 30s http timeout; this is the whole-cycle ceiling.
+const pollCycleTimeout = 10 * time.Minute
 
 // startPlanePoller launches a background goroutine that periodically syncs every
 // project that has a Plane connection. Runs outside the HTTP request lifecycle,
@@ -47,6 +53,9 @@ func runPlanePollCycle(db *sqlx.DB, config Configuration) {
 			log.Printf("plane poller: panic in poll cycle: %v", r)
 		}
 	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), pollCycleTimeout)
+	defer cancel()
 
 	tx, err := db.Beginx()
 	if err != nil {
@@ -114,13 +123,20 @@ func runPlanePollCycle(db *sqlx.DB, config Configuration) {
 					serr = fmt.Errorf("panic: %v", r)
 				}
 			}()
-			_, serr = svc.SyncProject(conn.ProjectID)
+			_, serr = svc.SyncProject(ctx, conn.ProjectID)
 		}()
 		if serr != nil {
 			log.Printf("plane poller: sync project %s: %v", conn.ProjectID, serr)
 			// Roll back this connection's (possibly aborted) writes so the shared tx
 			// stays valid for the remaining connections and the final commit.
-			_ = repo.RollbackToSavepoint(spName)
+			if rbErr := repo.RollbackToSavepoint(spName); rbErr != nil {
+				// The tx could not be recovered to the savepoint; it is now in an
+				// unrecoverable (aborted) state. Stop processing further connections
+				// and let the deferred tx.Rollback discard the whole cycle, rather
+				// than continuing to issue doomed statements against a dead tx.
+				log.Printf("plane poller: rollback-to-savepoint failed for %s, aborting cycle: %v", conn.ProjectID, rbErr)
+				return
+			}
 			_ = repo.ReleaseSavepoint(spName)
 			continue
 		}
