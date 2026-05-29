@@ -13,6 +13,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -1140,6 +1142,269 @@ func Test_resolveWorkspace(t *testing.T) {
 				t.Errorf("expected error for missing account")
 			}
 		})
+	})
+}
+
+// ===========================================================================
+// Plane MCP tools
+// ===========================================================================
+
+func Test_mcpSetPlaneConnection(t *testing.T) {
+	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		fix := newProjectFixture(t, s)
+
+		t.Run("sad: missing api_key returns error", func(t *testing.T) {
+			_, err := mcpSetPlaneConnection(ctx, s, planeConnectionArgs{
+				WorkspaceID: ws.ID, ProjectID: fix.Project.ID,
+				BaseURL: "https://api.plane.so", PlaneWorkspace: "ws", WatchedProjects: "",
+			})
+			if err == nil {
+				t.Fatal("expected error for missing api_key")
+			}
+		})
+
+		t.Run("happy: creates connection and returns hint", func(t *testing.T) {
+			conn, err := mcpSetPlaneConnection(ctx, s, planeConnectionArgs{
+				WorkspaceID: ws.ID, ProjectID: fix.Project.ID,
+				BaseURL: "https://api.plane.so", PlaneWorkspace: "my-ws",
+				APIKey: "secret_key_abcd", WatchedProjects: "p1,p2",
+			})
+			mustOK(t, err, "mcpSetPlaneConnection")
+			if conn == nil {
+				t.Fatal("expected non-nil connection")
+			}
+			if conn.APIKeyHint != "abcd" {
+				t.Fatalf("expected hint 'abcd', got %q", conn.APIKeyHint)
+			}
+			if conn.PlaneWorkspace != "my-ws" {
+				t.Fatalf("expected PlaneWorkspace 'my-ws', got %q", conn.PlaneWorkspace)
+			}
+		})
+	})
+}
+
+func Test_mcpGetPlaneConnection(t *testing.T) {
+	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		fix := newProjectFixture(t, s)
+
+		t.Run("sad: no connection returns error", func(t *testing.T) {
+			_, err := mcpGetPlaneConnection(ctx, s, planeProjectArgs{WorkspaceID: ws.ID, ProjectID: fix.Project.ID})
+			if err == nil {
+				t.Fatal("expected error when no connection exists")
+			}
+		})
+
+		t.Run("happy: returns existing connection", func(t *testing.T) {
+			_, err := mcpSetPlaneConnection(ctx, s, planeConnectionArgs{
+				WorkspaceID: ws.ID, ProjectID: fix.Project.ID,
+				BaseURL: "https://api.plane.so", PlaneWorkspace: "ws-slug",
+				APIKey: "key_1234", WatchedProjects: "proj1",
+			})
+			mustOK(t, err, "set connection")
+
+			conn, err := mcpGetPlaneConnection(ctx, s, planeProjectArgs{WorkspaceID: ws.ID, ProjectID: fix.Project.ID})
+			mustOK(t, err, "mcpGetPlaneConnection")
+			if conn.PlaneWorkspace != "ws-slug" {
+				t.Fatalf("expected PlaneWorkspace 'ws-slug', got %q", conn.PlaneWorkspace)
+			}
+			if conn.WatchedProjects != "proj1" {
+				t.Fatalf("expected WatchedProjects 'proj1', got %q", conn.WatchedProjects)
+			}
+		})
+	})
+}
+
+func Test_mcpTestPlaneConnection(t *testing.T) {
+	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		fix := newProjectFixture(t, s)
+
+		t.Run("sad: no connection returns error", func(t *testing.T) {
+			_, err := mcpTestPlaneConnection(ctx, s, planeProjectArgs{WorkspaceID: ws.ID, ProjectID: fix.Project.ID})
+			if err == nil {
+				t.Fatal("expected error when no connection exists")
+			}
+		})
+
+		t.Run("sad: Plane server returns 401, TestConnection surfaces error", func(t *testing.T) {
+			// Use a dedicated server that always 401s (mirrors Test_PlaneClient_testConnection_401
+			// in plane_test.go but exercised through the full MCP handler path).
+			srv401 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(401)
+			}))
+			defer srv401.Close()
+
+			_, err2 := mcpSetPlaneConnection(ctx, s, planeConnectionArgs{
+				WorkspaceID: ws.ID, ProjectID: fix.Project.ID,
+				BaseURL: srv401.URL, PlaneWorkspace: "ws",
+				APIKey: "bad_key", WatchedProjects: "",
+			})
+			mustOK(t, err2, "set connection pointing at 401 server")
+
+			_, err3 := mcpTestPlaneConnection(ctx, s, planeProjectArgs{WorkspaceID: ws.ID, ProjectID: fix.Project.ID})
+			if err3 == nil {
+				t.Fatal("expected error when Plane server returns 401")
+			}
+		})
+	})
+}
+
+func Test_mcpLinkFeatureToPlane(t *testing.T) {
+	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		fix := newProjectFixture(t, s)
+		feat := fix.Features[0]
+
+		t.Run("happy: creates link and returns it", func(t *testing.T) {
+			link, err := mcpLinkFeatureToPlane(ctx, s, planeLinkArgs{
+				WorkspaceID: ws.ID, FeatureID: feat.ID,
+				PlaneProjectID: "pp1", PlaneWorkItemID: "WI-42",
+			})
+			mustOK(t, err, "mcpLinkFeatureToPlane")
+			if link == nil {
+				t.Fatal("expected non-nil link")
+			}
+			if link.FeatureID != feat.ID {
+				t.Fatalf("link.FeatureID = %q, want %q", link.FeatureID, feat.ID)
+			}
+			if link.PlaneWorkItemID != "WI-42" {
+				t.Fatalf("link.PlaneWorkItemID = %q, want WI-42", link.PlaneWorkItemID)
+			}
+		})
+
+		t.Run("sad: bad feature id returns error", func(t *testing.T) {
+			expectFail(t, "link bad feature", func() error {
+				_, err := mcpLinkFeatureToPlane(ctx, s, planeLinkArgs{
+					WorkspaceID: ws.ID, FeatureID: newUUID(),
+					PlaneProjectID: "pp1", PlaneWorkItemID: "WI-99",
+				})
+				return err
+			})
+		})
+	})
+}
+
+func Test_mcpUnlinkFeatureFromPlane(t *testing.T) {
+	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		fix := newProjectFixture(t, s)
+		feat := fix.Features[0]
+
+		t.Run("sad: no link returns error", func(t *testing.T) {
+			_, err := mcpUnlinkFeatureFromPlane(ctx, s, planeUnlinkArgs{WorkspaceID: ws.ID, FeatureID: feat.ID})
+			if err == nil {
+				t.Fatal("expected error when no link exists")
+			}
+		})
+
+		t.Run("happy: unlinks feature", func(t *testing.T) {
+			_, err := mcpLinkFeatureToPlane(ctx, s, planeLinkArgs{
+				WorkspaceID: ws.ID, FeatureID: feat.ID,
+				PlaneProjectID: "pp1", PlaneWorkItemID: "WI-1",
+			})
+			mustOK(t, err, "link")
+
+			res, err := mcpUnlinkFeatureFromPlane(ctx, s, planeUnlinkArgs{WorkspaceID: ws.ID, FeatureID: feat.ID})
+			mustOK(t, err, "mcpUnlinkFeatureFromPlane")
+			if !res.OK {
+				t.Fatal("expected OK=true")
+			}
+
+			// Confirm link is gone
+			_, err2 := s.GetPlaneLinkByFeature(feat.ID)
+			if err2 == nil {
+				t.Fatal("expected link to be deleted")
+			}
+		})
+	})
+}
+
+func Test_mcpPlaneSync(t *testing.T) {
+	runInTx(t, func(t *testing.T, ctx context.Context, s Service, _ *Account, ws *Workspace, _ *Member) {
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		fix := newProjectFixture(t, s)
+		feat := fix.Features[1] // feature with no seeded comment
+
+		fp := newFakePlane()
+		defer fp.srv.Close()
+
+		_, err := mcpSetPlaneConnection(ctx, s, planeConnectionArgs{
+			WorkspaceID: ws.ID, ProjectID: fix.Project.ID,
+			BaseURL: fp.srv.URL, PlaneWorkspace: "ws",
+			APIKey: "key", WatchedProjects: "",
+		})
+		mustOK(t, err, "SetPlaneConnection")
+
+		link, err := mcpLinkFeatureToPlane(ctx, s, planeLinkArgs{
+			WorkspaceID: ws.ID, FeatureID: feat.ID,
+			PlaneProjectID: "pp", PlaneWorkItemID: "wi-1",
+		})
+		mustOK(t, err, "LinkFeatureToPlane")
+
+		// add a local comment to push
+		_, err = s.CreateFeatureCommentWithID(newUUID(), feat.ID, "mcp sync test comment")
+		mustOK(t, err, "CreateFeatureComment")
+
+		t.Run("happy: syncs via feature_id, persists LastStatus and LastSyncedAt", func(t *testing.T) {
+			res, err := mcpPlaneSync(ctx, s, planeSyncArgs{
+				WorkspaceID: ws.ID, FeatureID: feat.ID,
+			})
+			mustOK(t, err, "mcpPlaneSync")
+			if res == nil {
+				t.Fatal("expected non-nil SyncResult")
+			}
+			if res.Pushed != 1 {
+				t.Fatalf("expected 1 pushed, got %d", res.Pushed)
+			}
+			if len(res.PerLink) != 1 {
+				t.Fatalf("expected 1 per-link result, got %d", len(res.PerLink))
+			}
+			if res.PerLink[0].Status != string(StatusOK) {
+				t.Fatalf("per-link status = %q, want ok", res.PerLink[0].Status)
+			}
+
+			// Critical: verify cursor + status were persisted to the DB row
+			// (not just set in-memory). Read back via the repo.
+			persisted, err2 := s.GetPlaneLinkByFeature(feat.ID)
+			mustOK(t, err2, "reload link")
+			if persisted.LastStatus != string(StatusOK) {
+				t.Fatalf("persisted LastStatus = %q, want ok -- StorePlaneLink was not called", persisted.LastStatus)
+			}
+			if persisted.LastSyncedAt == nil {
+				t.Fatal("persisted LastSyncedAt is nil -- StorePlaneLink was not called")
+			}
+		})
+
+		t.Run("idempotency: second sync via feature_id pushes nothing new", func(t *testing.T) {
+			res2, err2 := mcpPlaneSync(ctx, s, planeSyncArgs{
+				WorkspaceID: ws.ID, FeatureID: feat.ID,
+			})
+			mustOK(t, err2, "mcpPlaneSync second run")
+			if res2.Pushed != 0 {
+				t.Fatalf("second run pushed %d, want 0 (idempotency)", res2.Pushed)
+			}
+		})
+
+		t.Run("happy: syncs via project_id delegates to SyncProject", func(t *testing.T) {
+			// Seed a remote comment so the project sync has something to pull.
+			fp.seedRemote("<p>project-level pull</p>")
+			res3, err3 := mcpPlaneSync(ctx, s, planeSyncArgs{
+				WorkspaceID: ws.ID, ProjectID: fix.Project.ID,
+			})
+			mustOK(t, err3, "mcpPlaneSync project")
+			if res3 == nil {
+				t.Fatal("expected non-nil SyncResult for project sync")
+			}
+			// SyncProject persists via its own StorePlaneLink call -- just check we
+			// got a result (the per-link persistence test lives in Test_SyncProject_perLinkStatus).
+			if len(res3.PerLink) == 0 {
+				t.Fatal("expected at least one per-link result from project sync")
+			}
+		})
+
+		_ = link // suppress unused warning
 	})
 }
 

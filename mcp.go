@@ -539,6 +539,30 @@ func buildMCPServer() *mcpsdk.Server {
 		"Run a jq filter/projection over a project's full board and get back only the matched values ({results:[...]}). Use this to read a slice (e.g. all SYNC-* cards) or specific fields without fetching the entire board. "+queryBoardFilterDoc,
 		func(a queryBoardArgs) string { return a.WorkspaceID }, mcpQueryBoard)
 
+	add(srv, "set_plane_connection",
+		"Configure a project's Plane connection (base URL + API key + workspace slug + watched project ids). The API key is stored encrypted; only a last-4 hint is ever returned. Re-call to update.",
+		func(a planeConnectionArgs) string { return a.WorkspaceID }, mcpSetPlaneConnection)
+
+	add(srv, "get_plane_connection",
+		"Get a project's Plane connection (base URL, workspace slug, watched projects, key hint). Never returns the API key.",
+		func(a planeProjectArgs) string { return a.WorkspaceID }, mcpGetPlaneConnection)
+
+	add(srv, "test_plane_connection",
+		"Test a project's stored Plane connection by calling Plane's /users/me. Returns ok or a specific error (401, unreachable).",
+		func(a planeProjectArgs) string { return a.WorkspaceID }, mcpTestPlaneConnection)
+
+	add(srv, "link_feature_to_plane",
+		"Link a feature card to a Plane work item so their comments sync. One card links to at most one work item.",
+		func(a planeLinkArgs) string { return a.WorkspaceID }, mcpLinkFeatureToPlane)
+
+	add(srv, "unlink_feature_from_plane",
+		"Remove the Plane link from a feature card (stops comment sync for it).",
+		func(a planeUnlinkArgs) string { return a.WorkspaceID }, mcpUnlinkFeatureFromPlane)
+
+	add(srv, "plane_sync",
+		"Sync comments between Featmap and Plane for a project (or one card via feature_id). Pushes new local comments to Plane and pulls new Plane comments in, echo-safe. Returns per-link {pushed, pulled, status}.",
+		func(a planeSyncArgs) string { return a.WorkspaceID }, mcpPlaneSync)
+
 	add(srv, "create_project",
 		"Create a new project in a workspace. A project owns the entire story map (milestones, workflows, subworkflows, features).",
 		func(a createProjectArgs) string { return a.WorkspaceID }, mcpCreateProject)

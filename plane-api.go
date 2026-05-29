@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/render"
@@ -86,16 +87,25 @@ func linkFeatureToPlane(w http.ResponseWriter, r *http.Request) {
 func syncPlaneProject(w http.ResponseWriter, r *http.Request) {
 	pid := chi.URLParam(r, "projectID")
 	if fid := r.URL.Query().Get("feature_id"); fid != "" {
-		link, err := GetEnv(r).Service.GetPlaneLinkByFeature(fid)
+		svc := GetEnv(r).Service
+		link, err := svc.GetPlaneLinkByFeature(fid)
 		if err != nil {
 			_ = render.Render(w, r, ErrInvalidRequest(err))
 			return
 		}
-		pushed, pulled, serr := GetEnv(r).Service.SyncLink(link)
+		pushed, pulled, serr := svc.SyncLink(link)
+		now := time.Now().UTC()
+		link.LastSyncedAt = &now
 		if serr != nil {
+			link.LastStatus = string(StatusError)
+			link.LastError = serr.Error()
+			svc.GetRepoObject().StorePlaneLink(link)
 			_ = render.Render(w, r, ErrInvalidRequest(serr))
 			return
 		}
+		link.LastStatus = string(StatusOK)
+		link.LastError = ""
+		svc.GetRepoObject().StorePlaneLink(link) // persist status + advanced cursor
 		render.JSON(w, r, SyncResult{Pushed: pushed, Pulled: pulled, PerLink: []LinkSyncResult{{LinkID: link.ID, FeatureID: fid, Status: string(StatusOK), Pushed: pushed, Pulled: pulled}}})
 		return
 	}
