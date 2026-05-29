@@ -24,8 +24,15 @@ Entries below cover fork-local changes; upstream history is in the git log.
   and Postgres ENUM types `plane_comment_origin`/`plane_sync_status`. The background
   poller (first in the codebase) builds its own service+tx per cycle with an outer
   `recover()` + per-connection SAVEPOINT so one bad connection cannot crash the server
-  or roll back healthy ones. Comments-only: no card push, no field sync, edits not
-  synced (deferred -- see icebox ICE-033/034). Takes the MCP surface to 56 tools.
+  or roll back healthy ones. The connection base URL is SSRF-guarded: http(s)-only,
+  and private/loopback/link-local hosts (incl. the `169.254.169.254` cloud-metadata
+  address) are rejected on write and re-validated before every request and redirect
+  hop, unless the operator sets `planeAllowPrivateHosts` (for self-hosted Plane on an
+  internal address). Connection management requires admin; link/sync require editor +
+  subscription (matching the rest of the API). A per-comment push failure is isolated
+  (recorded and skipped) so one rejected comment cannot block the batch or the pull.
+  Comments-only: no card push, no field sync, edits not synced (deferred -- see icebox
+  ICE-033/034). Takes the MCP surface to 56 tools.
 - Account-scoped API keys for scripts and automation (`Authorization: Bearer ...`),
   managed from the Account settings page. Keys are UUID v4, SHA-256 hashed at rest
   with an 8-char display prefix, and shown in plaintext exactly once at creation
