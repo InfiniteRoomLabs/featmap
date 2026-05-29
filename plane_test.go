@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -48,5 +51,67 @@ func Test_planeKeyCrypto_wrongKeyFails(t *testing.T) {
 	}
 	if _, err := decryptPlaneKey(testKeyB64(t), cipher, nonce); err == nil {
 		t.Fatal("expected decrypt failure with wrong key")
+	}
+}
+
+func Test_PlaneClient_listComments_paginates(t *testing.T) {
+	page := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-Key") != "k" {
+			w.WriteHeader(401)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if page == 0 {
+			page++
+			_, _ = w.Write([]byte(`{"results":[{"id":"c1","comment_html":"<p>a</p>","updated_at":"2026-05-01T00:00:00Z","actor":"u1"}],"next_cursor":"x","next_page_results":true}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"results":[{"id":"c2","comment_html":"<p>b</p>","updated_at":"2026-05-02T00:00:00Z","actor":"u2"}],"next_cursor":"","next_page_results":false}`))
+	}))
+	defer srv.Close()
+
+	c := &PlaneClient{BaseURL: srv.URL, APIKey: "k", PlaneWorkspace: "ws", HTTP: srv.Client()}
+	comments, err := c.ListComments(context.Background(), "proj", "wi")
+	if err != nil {
+		t.Fatalf("ListComments: %v", err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("expected 2 comments across pages, got %d", len(comments))
+	}
+	if comments[0].ID != "c1" || comments[1].ID != "c2" {
+		t.Fatalf("unexpected ids: %+v", comments)
+	}
+}
+
+func Test_PlaneClient_createComment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(405)
+			return
+		}
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"id":"new1","comment_html":"<p>hi</p>","updated_at":"2026-05-03T00:00:00Z","actor":"me"}`))
+	}))
+	defer srv.Close()
+
+	c := &PlaneClient{BaseURL: srv.URL, APIKey: "k", PlaneWorkspace: "ws", HTTP: srv.Client()}
+	cm, err := c.CreateComment(context.Background(), "proj", "wi", "<p>hi</p>")
+	if err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+	if cm.ID != "new1" {
+		t.Fatalf("expected id new1, got %q", cm.ID)
+	}
+}
+
+func Test_PlaneClient_testConnection_401(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+	}))
+	defer srv.Close()
+	c := &PlaneClient{BaseURL: srv.URL, APIKey: "bad", HTTP: srv.Client()}
+	if err := c.TestConnection(context.Background()); err == nil {
+		t.Fatal("expected 401 error from TestConnection")
 	}
 }
