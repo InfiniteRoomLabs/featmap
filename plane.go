@@ -15,7 +15,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/microcosm-cc/bluemonday"
 )
 
 // Plane integration: REST client, credential crypto, and the value-typed enums
@@ -104,6 +107,22 @@ func decryptPlaneKey(keyB64 string, ciphertext, nonce []byte) (string, error) {
 	return string(plaintext), nil
 }
 
+// planeHTMLSanitizer strips ALL tags from Plane comment HTML, leaving safe text.
+// Plane comment authors are untrusted (a different, larger population than the
+// admin who configured the connection), so their comment_html must never be
+// stored raw: it is served verbatim by get_feature/get_board/query_board and
+// would be a stored-XSS payload for any consumer that renders HTML. StrictPolicy
+// removes every tag (so no <script>, no event handlers, no javascript: URIs
+// survive) and the result is plain text -- which is also the right shape for the
+// markdown-rendered `post` field (react-markdown escapes HTML anyway, so raw tags
+// would render as ugly literals; stripping them renders cleaner). Full md<->html
+// fidelity is deferred (icebox ICE-034).
+var planeHTMLSanitizer = bluemonday.StrictPolicy()
+
+func sanitizePlaneCommentHTML(html string) string {
+	return planeHTMLSanitizer.Sanitize(html)
+}
+
 // PlaneComment is the subset of a Plane work-item comment we use.
 type PlaneComment struct {
 	ID          string    `json:"id"`
@@ -174,14 +193,55 @@ func validatePlaneBaseURL(rawURL string, allowPrivate bool) error {
 	return nil
 }
 
+// ssrfGuardControl is a net.Dialer.Control hook that rejects a connection whose
+// RESOLVED address is private/loopback/link-local. Because Control runs after DNS
+// resolution and immediately before connect, it closes the validate-then-dial
+// TOCTOU/DNS-rebinding gap: even if a hostname resolved to a public IP at
+// validation time and flips to 169.254.169.254 (or 127.0.0.1, 10/8, ...) by the
+// time we dial, the dial itself is refused. It fires for the initial request AND
+// every redirect hop (same Transport), so a 302 to an internal IP is blocked too.
+func ssrfGuardControl(allowPrivate bool) func(network, address string, c syscall.RawConn) error {
+	return func(network, address string, _ syscall.RawConn) error {
+		if allowPrivate {
+			return nil
+		}
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return fmt.Errorf("ssrf guard: cannot parse dial address %q: %w", address, err)
+		}
+		ip := net.ParseIP(host)
+		if ip == nil {
+			return fmt.Errorf("ssrf guard: dial address %q is not an IP", host)
+		}
+		if isBlockedHostIP(ip) {
+			return fmt.Errorf("ssrf guard: refusing to connect to private/loopback/link-local address %s", ip)
+		}
+		return nil
+	}
+}
+
 func (c *PlaneClient) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control:   ssrfGuardControl(c.AllowPrivate),
+	}
 	return &http.Client{
 		Timeout: 30 * time.Second,
-		// Re-validate every redirect hop so a 302 to a metadata/internal IP is
-		// blocked even though the original BaseURL was public.
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           dialer.DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+		// Belt-and-suspenders: also re-validate the redirect target URL's host up
+		// front (the dialer Control is the authoritative IP-level enforcement).
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")

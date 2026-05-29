@@ -300,3 +300,51 @@ func Test_SyncLink_pushError_continues(t *testing.T) {
 		}
 	})
 }
+
+// Test_SyncLink_pull_sanitizesHTML proves the stored-XSS guard is wired into the
+// pull path: a Plane comment carrying a <script> is stored as safe text.
+func Test_SyncLink_pull_sanitizesHTML(t *testing.T) {
+	runInTx(t, func(t *testing.T, ctx context.Context, s Service, acc *Account, ws *Workspace, member *Member) {
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t), PlaneAllowPrivateHosts: true})
+		fx := newProjectFixture(t, s)
+		feat := fx.Features[4]
+
+		malicious := `<p>hi</p><script>alert(document.cookie)</script><img src=x onerror="steal()">`
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPost {
+				w.WriteHeader(201)
+				b, _ := json.Marshal(PlaneComment{ID: "x1", CommentHTML: "<p>ok</p>", UpdatedAt: time.Now().UTC()})
+				_, _ = w.Write(b)
+				return
+			}
+			b, _ := json.Marshal(planeCommentList{Results: []PlaneComment{{ID: "evil-1", CommentHTML: malicious, UpdatedAt: time.Now().UTC(), Actor: "attacker"}}, NextPageResults: false})
+			_, _ = w.Write(b)
+		}))
+		defer srv.Close()
+
+		_, err := s.SetPlaneConnection(fx.Project.ID, srv.URL, "ws", "key", "")
+		mustOK(t, err, "SetPlaneConnection")
+		link, err := s.LinkFeatureToPlane(feat.ID, "pp", "wi")
+		mustOK(t, err, "link")
+
+		_, pulled, serr := s.SyncLink(ctx, link)
+		mustOK(t, serr, "sync")
+		if pulled != 1 {
+			t.Fatalf("expected 1 pulled, got %d", pulled)
+		}
+		comments := s.GetFeatureCommentsByFeature(feat.ID)
+		if len(comments) != 1 {
+			t.Fatalf("expected 1 stored comment, got %d", len(comments))
+		}
+		post := comments[0].Post
+		for _, bad := range []string{"<script", "onerror", "alert(", "<img", "steal()"} {
+			if strings.Contains(post, bad) {
+				t.Fatalf("stored comment still contains %q (XSS not sanitized): %q", bad, post)
+			}
+		}
+		if !strings.Contains(post, "hi") {
+			t.Fatalf("expected visible text 'hi' preserved, got %q", post)
+		}
+	})
+}

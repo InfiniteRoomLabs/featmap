@@ -2677,8 +2677,10 @@ func (s *service) SyncLink(ctx context.Context, link *PlaneLink) (int, int, erro
 		if mappedPlane[pc.ID] {
 			continue // already imported OR our own pushed comment -> echo-safe
 		}
-		// create local comment with plane attribution
-		fc, cerr := s.CreateFeatureCommentWithID(newUUID(), link.FeatureID, pc.CommentHTML)
+		// create local comment with plane attribution. Sanitize the untrusted
+		// Plane HTML to safe text before storage (stored-XSS guard; see
+		// sanitizePlaneCommentHTML in plane.go).
+		fc, cerr := s.CreateFeatureCommentWithID(newUUID(), link.FeatureID, sanitizePlaneCommentHTML(pc.CommentHTML))
 		if cerr != nil {
 			return pushed, pulled, cerr
 		}

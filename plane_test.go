@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -152,5 +153,50 @@ func Test_validatePlaneBaseURL_SSRF(t *testing.T) {
 	// ...but scheme is still enforced even with allowPrivate=true.
 	if err := validatePlaneBaseURL("file:///etc/passwd", true); err == nil {
 		t.Error("expected non-http scheme rejected even with allowPrivate=true")
+	}
+}
+
+func Test_ssrfGuardControl(t *testing.T) {
+	// allowPrivate=false: blocked ranges (incl. cloud metadata) refused at dial.
+	guard := ssrfGuardControl(false)
+	for _, addr := range []string{"127.0.0.1:443", "169.254.169.254:80", "10.0.0.5:443", "192.168.1.1:8080", "[::1]:443"} {
+		if err := guard("tcp", addr, nil); err == nil {
+			t.Errorf("expected dial to %s to be refused", addr)
+		}
+	}
+	// Public addresses allowed.
+	for _, addr := range []string{"8.8.8.8:443", "1.1.1.1:80"} {
+		if err := guard("tcp", addr, nil); err != nil {
+			t.Errorf("expected dial to %s allowed, got %v", addr, err)
+		}
+	}
+	// allowPrivate=true: opt-in lets private addresses through.
+	open := ssrfGuardControl(true)
+	if err := open("tcp", "127.0.0.1:443", nil); err != nil {
+		t.Errorf("allowPrivate=true should permit loopback, got %v", err)
+	}
+}
+
+func Test_sanitizePlaneCommentHTML(t *testing.T) {
+	cases := []struct {
+		in       string
+		mustOmit []string // substrings that MUST NOT appear (script/handlers)
+		mustHave string   // visible text that should survive
+	}{
+		{`<p>hello <b>world</b></p>`, []string{"<p>", "<b>"}, "hello world"},
+		{`<script>alert(1)</script>safe`, []string{"<script", "alert(1)"}, "safe"},
+		{`<img src=x onerror="alert(1)">caption`, []string{"onerror", "<img", "alert(1)"}, "caption"},
+		{`<a href="javascript:alert(1)">click</a>`, []string{"javascript:", "<a"}, "click"},
+	}
+	for _, c := range cases {
+		got := sanitizePlaneCommentHTML(c.in)
+		for _, bad := range c.mustOmit {
+			if strings.Contains(got, bad) {
+				t.Errorf("sanitized %q still contains %q: got %q", c.in, bad, got)
+			}
+		}
+		if c.mustHave != "" && !strings.Contains(got, c.mustHave) {
+			t.Errorf("sanitized %q dropped expected text %q: got %q", c.in, c.mustHave, got)
+		}
 	}
 }

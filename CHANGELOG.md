@@ -105,5 +105,17 @@ Entries below cover fork-local changes; upstream history is in the git log.
   in `CLAUDE.md` and `readme.md`.
 
 ### Security
+- Plane sync SSRF hardening: the outbound HTTP client now refuses connections to
+  private/loopback/link-local IPs at *dial* time via a `net.Dialer.Control` hook
+  (`plane.go` `ssrfGuardControl`), closing the validate-then-dial DNS-rebinding
+  TOCTOU gap left by URL-only validation -- it sees the post-resolution address, so
+  a hostname that flips to an internal IP after the on-write check is still blocked,
+  on the initial request and every redirect hop. Operator opt-in
+  `planeAllowPrivateHosts` bypasses it for self-hosted Plane.
+- Plane sync stored-XSS guard: comments pulled from Plane are sanitized to plain
+  text with `bluemonday.StrictPolicy()` before storage (`plane.go`
+  `sanitizePlaneCommentHTML`, applied in `service.SyncLink`). Plane comment authors
+  are untrusted input and `comment_html` is served verbatim by
+  `get_feature`/`get_board`/`query_board`, so raw HTML must never be stored.
 - `.gitignore` excludes `/.mcp.json` (live API key bearer tokens) so client configs
   are never committed.
