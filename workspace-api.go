@@ -79,6 +79,10 @@ func workspaceAPI(r chi.Router) {
 	})
 
 	r.Group(func(r chi.Router) {
+		planeAPI(r)
+	})
+
+	r.Group(func(r chi.Router) {
 
 		r.Route("/",
 			func(r chi.Router) {
