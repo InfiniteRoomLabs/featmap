@@ -23,6 +23,22 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// SyncResult summarizes one sync run.
+type SyncResult struct {
+	Pushed  int              `json:"pushed"`
+	Pulled  int              `json:"pulled"`
+	PerLink []LinkSyncResult `json:"perLink"`
+}
+
+type LinkSyncResult struct {
+	LinkID    string `json:"linkId"`
+	FeatureID string `json:"featureId"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	Pushed    int    `json:"pushed"`
+	Pulled    int    `json:"pulled"`
+}
+
 // Service ...
 type Service interface {
 	// Technical
@@ -177,6 +193,9 @@ type Service interface {
 	UnlinkFeatureFromPlane(featureID string) error
 	GetPlaneLinkByFeature(featureID string) (*PlaneLink, error)
 	FindPlaneLinksByProject(projectID string) ([]*PlaneLink, error)
+
+	SyncProject(projectID string) (*SyncResult, error)
+	SyncLink(link *PlaneLink) (pushed int, pulled int, err error)
 }
 
 type service struct {
@@ -2551,4 +2570,140 @@ func (s *service) UnlinkFeatureFromPlane(featureID string) error {
 	}
 	s.r.DeletePlaneLink(s.Member.WorkspaceID, link.ID)
 	return nil
+}
+
+// SyncLink pushes unmapped local comments to Plane and pulls unmapped Plane
+// comments back, advancing link.LastPulledCursor in memory on a full pull.
+// Caller is responsible for persisting link via StorePlaneLink to save the
+// updated cursor (and LastStatus/LastError); SyncLink itself does not write the
+// link row. SyncProject does this; any other caller (per-link REST endpoint,
+// poller) must do the same or the cursor reverts on the next DB read.
+func (s *service) SyncLink(link *PlaneLink) (int, int, error) {
+	conn, err := s.r.GetPlaneConnectionByProject(s.Member.WorkspaceID, link.ProjectID)
+	if err != nil {
+		return 0, 0, errors.New("no plane connection for project")
+	}
+	client, err := s.planeClientForConnection(conn)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	maps, err := s.r.FindPlaneCommentMapByLink(s.Member.WorkspaceID, link.ID)
+	if err != nil {
+		return 0, 0, err
+	}
+	// index by featmap comment id (push side) and plane comment id (pull side)
+	mappedFeatmap := map[string]bool{}
+	mappedPlane := map[string]bool{}
+	for _, m := range maps {
+		if m.FeatmapCommentID != nil && m.PlaneCommentID != nil {
+			mappedFeatmap[*m.FeatmapCommentID] = true
+		}
+		if m.PlaneCommentID != nil {
+			mappedPlane[*m.PlaneCommentID] = true
+		}
+	}
+
+	pushed := 0
+	// PUSH: featmap comments with no (featmap_comment_id -> plane_comment_id) map row.
+	// Read directly via the repo so a transient DB error propagates instead of being
+	// swallowed: GetFeatureCommentsByFeature logs-and-returns-empty, which would make a
+	// failed read look like "nothing to push" and let SyncProject store LastStatus=ok.
+	localComments, lcErr := s.r.FindFeatureCommentsByFeatureID(s.Member.WorkspaceID, link.FeatureID)
+	if lcErr != nil {
+		return pushed, 0, lcErr
+	}
+	for _, lc := range localComments {
+		if mappedFeatmap[lc.ID] {
+			continue // already pushed
+		}
+		// skip comments that ORIGINATED from plane (they have a map row with origin=plane)
+		originatedFromPlane := false
+		for _, m := range maps {
+			if m.FeatmapCommentID != nil && *m.FeatmapCommentID == lc.ID && m.Origin == string(OriginPlane) {
+				originatedFromPlane = true
+				break
+			}
+		}
+		if originatedFromPlane {
+			continue
+		}
+		pc, perr := client.CreateComment(context.Background(), link.PlaneProjectID, link.PlaneWorkItemID, lc.Post)
+		if perr != nil {
+			// leave unmapped (stays queued); record and continue, never panic
+			return pushed, 0, perr
+		}
+		pcID := pc.ID
+		fcID := lc.ID
+		s.r.StorePlaneCommentMap(&PlaneCommentMap{
+			WorkspaceID: s.Member.WorkspaceID, ID: newUUID(), LinkID: link.ID,
+			FeatmapCommentID: &fcID, PlaneCommentID: &pcID, Origin: string(OriginFeatmap),
+			PlaneUpdatedAt: &pc.UpdatedAt, CreatedAt: time.Now().UTC(),
+		})
+		mappedPlane[pcID] = true
+		pushed++
+	}
+
+	pulled := 0
+	// PULL: all plane comments; skip mapped (echo/edit-safe) + watermark optimization.
+	planeComments, perr := client.ListComments(context.Background(), link.PlaneProjectID, link.PlaneWorkItemID)
+	if perr != nil {
+		return pushed, pulled, perr
+	}
+	var maxSeen string
+	for _, pc := range planeComments {
+		if mappedPlane[pc.ID] {
+			continue // already imported OR our own pushed comment -> echo-safe
+		}
+		// create local comment with plane attribution
+		fc, cerr := s.CreateFeatureCommentWithID(newUUID(), link.FeatureID, pc.CommentHTML)
+		if cerr != nil {
+			return pushed, pulled, cerr
+		}
+		pcID := pc.ID
+		fcID := fc.ID
+		s.r.StorePlaneCommentMap(&PlaneCommentMap{
+			WorkspaceID: s.Member.WorkspaceID, ID: newUUID(), LinkID: link.ID,
+			FeatmapCommentID: &fcID, PlaneCommentID: &pcID, Origin: string(OriginPlane),
+			PlaneUpdatedAt: &pc.UpdatedAt, CreatedAt: time.Now().UTC(),
+		})
+		pulled++
+		if ts := pc.UpdatedAt.UTC().Format(time.RFC3339Nano); ts > maxSeen {
+			maxSeen = ts
+		}
+	}
+	// advance cursor only on full pull success
+	if maxSeen > link.LastPulledCursor {
+		link.LastPulledCursor = maxSeen
+	}
+	return pushed, pulled, nil
+}
+
+func (s *service) SyncProject(projectID string) (*SyncResult, error) {
+	links, err := s.r.FindPlaneLinksByProject(s.Member.WorkspaceID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	res := &SyncResult{PerLink: []LinkSyncResult{}}
+	for _, link := range links {
+		pushed, pulled, serr := s.SyncLink(link)
+		lr := LinkSyncResult{LinkID: link.ID, FeatureID: link.FeatureID, Pushed: pushed, Pulled: pulled}
+		now := time.Now().UTC()
+		link.LastSyncedAt = &now
+		if serr != nil {
+			link.LastStatus = string(StatusError)
+			link.LastError = serr.Error()
+			lr.Status = string(StatusError)
+			lr.Error = serr.Error()
+		} else {
+			link.LastStatus = string(StatusOK)
+			link.LastError = ""
+			lr.Status = string(StatusOK)
+		}
+		s.r.StorePlaneLink(link) // persist status + advanced cursor
+		res.Pushed += pushed
+		res.Pulled += pulled
+		res.PerLink = append(res.PerLink, lr)
+	}
+	return res, nil
 }
