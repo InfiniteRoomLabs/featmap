@@ -178,6 +178,47 @@ type FeatureCommentOwner struct {
 	ProjectID        string `db:"project_id" json:"projectId"`
 }
 
+// PlaneConnection -- per-project link to a Plane instance (SYNC-001/002/003).
+type PlaneConnection struct {
+	WorkspaceID     string    `db:"workspace_id" json:"workspaceId"`
+	ID              string    `db:"id" json:"id"`
+	ProjectID       string    `db:"project_id" json:"projectId"`
+	BaseURL         string    `db:"base_url" json:"baseUrl"`
+	PlaneWorkspace  string    `db:"plane_workspace" json:"planeWorkspace"`
+	APIKeyCipher    []byte    `db:"api_key_cipher" json:"-"`
+	APIKeyNonce     []byte    `db:"api_key_nonce" json:"-"`
+	APIKeyHint      string    `db:"api_key_hint" json:"apiKeyHint"`
+	WatchedProjects string    `db:"watched_projects" json:"watchedProjects"`
+	CreatedAt       time.Time `db:"created_at" json:"createdAt"`
+	LastModified    time.Time `db:"last_modified" json:"lastModified"`
+}
+
+// PlaneLink -- a feature card linked to a Plane work item (SYNC-010/023/040).
+type PlaneLink struct {
+	WorkspaceID      string     `db:"workspace_id" json:"workspaceId"`
+	ID               string     `db:"id" json:"id"`
+	ProjectID        string     `db:"project_id" json:"projectId"`
+	FeatureID        string     `db:"feature_id" json:"featureId"`
+	PlaneProjectID   string     `db:"plane_project_id" json:"planeProjectId"`
+	PlaneWorkItemID  string     `db:"plane_work_item_id" json:"planeWorkItemId"`
+	LastPulledCursor string     `db:"last_pulled_cursor" json:"lastPulledCursor"`
+	LastSyncedAt     *time.Time `db:"last_synced_at" json:"lastSyncedAt"`
+	LastStatus       string     `db:"last_status" json:"lastStatus"`
+	LastError        string     `db:"last_error" json:"lastError"`
+}
+
+// PlaneCommentMap -- maps Featmap<->Plane comments + origin (SYNC-020/021/022).
+type PlaneCommentMap struct {
+	WorkspaceID      string     `db:"workspace_id" json:"workspaceId"`
+	ID               string     `db:"id" json:"id"`
+	LinkID           string     `db:"link_id" json:"linkId"`
+	FeatmapCommentID *string    `db:"featmap_comment_id" json:"featmapCommentId"`
+	PlaneCommentID   *string    `db:"plane_comment_id" json:"planeCommentId"`
+	Origin           string     `db:"origin" json:"origin"`
+	PlaneUpdatedAt   *time.Time `db:"plane_updated_at" json:"planeUpdatedAt"`
+	CreatedAt        time.Time  `db:"created_at" json:"createdAt"`
+}
+
 // Persona ...
 type Persona struct {
 	WorkspaceID string    `db:"workspace_id" json:"workspaceId"`
