@@ -2,6 +2,8 @@
   "appSiteURL": "https://localhost:5000",
   "dbConnectionString": "postgresql://postgres:postgres@postgres:5432/postgres?sslmode=disable",
   "jwtSecret": "ChangeMeForProduction",
+  "planeEncryptionKey": "",
+  "planePollInterval": "5m",
   "port": "5000",
   "emailFrom": "",
   "smtpServer": "",

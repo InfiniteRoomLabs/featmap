@@ -32,6 +32,8 @@ type Configuration struct {
 	AppSiteURL          string `json:"appSiteURL"`
 	DbConnectionString  string `json:"dbConnectionString"`
 	JWTSecret           string `json:"jwtSecret"`
+	PlaneEncryptionKey  string `json:"planeEncryptionKey"`
+	PlanePollInterval   string `json:"planePollInterval"`
 	Port                string `json:"port"`
 	EmailFrom           string `json:"emailFrom"`
 	SMTPServer          string `json:"smtpServer"`
