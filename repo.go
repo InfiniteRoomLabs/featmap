@@ -105,6 +105,21 @@ type Repository interface {
 	FindWorkflowPersonasByProject(workspaceID string, projectID string) ([]*WorkflowPersona, error)
 	StoreWorkflowPersona(x *WorkflowPersona)
 	DeleteWorkflowPersona(workspaceID string, id string)
+
+	GetPlaneConnectionByProject(workspaceID string, projectID string) (*PlaneConnection, error)
+	StorePlaneConnection(x *PlaneConnection)
+	DeletePlaneConnection(workspaceID string, id string)
+	FindPlaneConnections(workspaceID string) ([]*PlaneConnection, error)
+	FindAllPlaneConnections() ([]*PlaneConnection, error)
+
+	GetPlaneLink(workspaceID string, id string) (*PlaneLink, error)
+	GetPlaneLinkByFeature(workspaceID string, featureID string) (*PlaneLink, error)
+	FindPlaneLinksByProject(workspaceID string, projectID string) ([]*PlaneLink, error)
+	StorePlaneLink(x *PlaneLink)
+	DeletePlaneLink(workspaceID string, id string)
+
+	FindPlaneCommentMapByLink(workspaceID string, linkID string) ([]*PlaneCommentMap, error)
+	StorePlaneCommentMap(x *PlaneCommentMap)
 }
 
 type repo struct {
@@ -725,4 +740,102 @@ func (a *repo) RevokeAPIKey(accountID string, id string) {
 
 func (a *repo) TouchAPIKeyLastUsed(id string) {
 	a.tx.MustExec("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1", id)
+}
+
+// --- Plane connections ---
+
+func (a *repo) GetPlaneConnectionByProject(workspaceID, projectID string) (*PlaneConnection, error) {
+	x := &PlaneConnection{}
+	if err := a.tx.Get(x, "SELECT * FROM plane_connections WHERE workspace_id=$1 AND project_id=$2", workspaceID, projectID); err != nil {
+		return nil, errors.Wrap(err, "not found")
+	}
+	return x, nil
+}
+
+func (a *repo) FindPlaneConnections(workspaceID string) ([]*PlaneConnection, error) {
+	x := []*PlaneConnection{}
+	if err := a.tx.Select(&x, "SELECT * FROM plane_connections WHERE workspace_id=$1", workspaceID); err != nil {
+		return nil, errors.Wrap(err, "not found")
+	}
+	return x, nil
+}
+
+// FindAllPlaneConnections is for the poller, which runs outside a workspace scope.
+func (a *repo) FindAllPlaneConnections() ([]*PlaneConnection, error) {
+	x := []*PlaneConnection{}
+	if err := a.tx.Select(&x, "SELECT * FROM plane_connections"); err != nil {
+		return nil, errors.Wrap(err, "not found")
+	}
+	return x, nil
+}
+
+func (a *repo) StorePlaneConnection(x *PlaneConnection) {
+	a.tx.MustExec(`INSERT INTO plane_connections
+		(workspace_id, id, project_id, base_url, plane_workspace, api_key_cipher, api_key_nonce, api_key_hint, watched_projects, created_at, last_modified)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		ON CONFLICT (workspace_id, id) DO UPDATE SET
+		  base_url=$4, plane_workspace=$5, api_key_cipher=$6, api_key_nonce=$7, api_key_hint=$8, watched_projects=$9, last_modified=$11`,
+		x.WorkspaceID, x.ID, x.ProjectID, x.BaseURL, x.PlaneWorkspace, x.APIKeyCipher, x.APIKeyNonce, x.APIKeyHint, x.WatchedProjects, x.CreatedAt, x.LastModified)
+}
+
+func (a *repo) DeletePlaneConnection(workspaceID, id string) {
+	a.tx.MustExec("DELETE FROM plane_connections WHERE workspace_id=$1 AND id=$2", workspaceID, id)
+}
+
+// --- Plane links ---
+
+func (a *repo) GetPlaneLink(workspaceID, id string) (*PlaneLink, error) {
+	x := &PlaneLink{}
+	if err := a.tx.Get(x, "SELECT * FROM plane_links WHERE workspace_id=$1 AND id=$2", workspaceID, id); err != nil {
+		return nil, errors.Wrap(err, "not found")
+	}
+	return x, nil
+}
+
+func (a *repo) GetPlaneLinkByFeature(workspaceID, featureID string) (*PlaneLink, error) {
+	x := &PlaneLink{}
+	if err := a.tx.Get(x, "SELECT * FROM plane_links WHERE workspace_id=$1 AND feature_id=$2", workspaceID, featureID); err != nil {
+		return nil, errors.Wrap(err, "not found")
+	}
+	return x, nil
+}
+
+func (a *repo) FindPlaneLinksByProject(workspaceID, projectID string) ([]*PlaneLink, error) {
+	x := []*PlaneLink{}
+	if err := a.tx.Select(&x, "SELECT * FROM plane_links WHERE workspace_id=$1 AND project_id=$2", workspaceID, projectID); err != nil {
+		return nil, errors.Wrap(err, "not found")
+	}
+	return x, nil
+}
+
+func (a *repo) StorePlaneLink(x *PlaneLink) {
+	a.tx.MustExec(`INSERT INTO plane_links
+		(workspace_id, id, project_id, feature_id, plane_project_id, plane_work_item_id, last_pulled_cursor, last_synced_at, last_status, last_error)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		ON CONFLICT (workspace_id, id) DO UPDATE SET
+		  plane_project_id=$5, plane_work_item_id=$6, last_pulled_cursor=$7, last_synced_at=$8, last_status=$9, last_error=$10`,
+		x.WorkspaceID, x.ID, x.ProjectID, x.FeatureID, x.PlaneProjectID, x.PlaneWorkItemID, x.LastPulledCursor, x.LastSyncedAt, x.LastStatus, x.LastError)
+}
+
+func (a *repo) DeletePlaneLink(workspaceID, id string) {
+	a.tx.MustExec("DELETE FROM plane_links WHERE workspace_id=$1 AND id=$2", workspaceID, id)
+}
+
+// --- Plane comment map ---
+
+func (a *repo) FindPlaneCommentMapByLink(workspaceID, linkID string) ([]*PlaneCommentMap, error) {
+	x := []*PlaneCommentMap{}
+	if err := a.tx.Select(&x, "SELECT * FROM plane_comment_map WHERE workspace_id=$1 AND link_id=$2", workspaceID, linkID); err != nil {
+		return nil, errors.Wrap(err, "not found")
+	}
+	return x, nil
+}
+
+func (a *repo) StorePlaneCommentMap(x *PlaneCommentMap) {
+	a.tx.MustExec(`INSERT INTO plane_comment_map
+		(workspace_id, id, link_id, featmap_comment_id, plane_comment_id, origin, plane_updated_at, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (workspace_id, id) DO UPDATE SET
+		  featmap_comment_id=$4, plane_comment_id=$5, origin=$6, plane_updated_at=$7`,
+		x.WorkspaceID, x.ID, x.LinkID, x.FeatmapCommentID, x.PlaneCommentID, x.Origin, x.PlaneUpdatedAt, x.CreatedAt)
 }
