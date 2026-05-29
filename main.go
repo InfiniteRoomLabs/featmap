@@ -47,6 +47,10 @@ type Configuration struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "plane" {
+		runPlaneCLI(os.Args[2:])
+		return
+	}
 	r := chi.NewRouter()
 
 	// A good base middleware stack
