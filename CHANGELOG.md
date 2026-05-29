@@ -11,11 +11,26 @@ Entries below cover fork-local changes; upstream history is in the git log.
 ## [Unreleased]
 
 ### Added
+- Plane comment sync (v1, backend/agentic -- no UI yet): link a Featmap card to a
+  Plane work item and mirror comments both directions, echo-safe (dedupe by
+  external id via `plane_comment_map`), driveable from a background poller, REST
+  (`POST /v1/projects/{id}/plane/sync`), MCP (`plane_sync` + `set/get/test_plane_connection`,
+  `link/unlink_feature_to_plane`), and CLI (`featmap plane sync`). Per-project
+  connection with the Plane API key encrypted at rest (AES-256-GCM, dedicated
+  `planeEncryptionKey` conf field; only a last-4 hint is returned). The sync engine
+  (`service.SyncLink`/`SyncProject`) and the Plane REST client (`X-API-Key`, paginated
+  + page-bounded, context-threaded) live in `plane.go`/`plane-api.go`/`mcp_plane.go`/
+  `plane_poller.go`/`plane_cli.go`; new migration `24_plane_sync.up.sql` adds 3 tables
+  and Postgres ENUM types `plane_comment_origin`/`plane_sync_status`. The background
+  poller (first in the codebase) builds its own service+tx per cycle with an outer
+  `recover()` + per-connection SAVEPOINT so one bad connection cannot crash the server
+  or roll back healthy ones. Comments-only: no card push, no field sync, edits not
+  synced (deferred -- see icebox ICE-033/034). Takes the MCP surface to 56 tools.
 - Account-scoped API keys for scripts and automation (`Authorization: Bearer ...`),
   managed from the Account settings page. Keys are UUID v4, SHA-256 hashed at rest
   with an 8-char display prefix, and shown in plaintext exactly once at creation
   (`migrations/23_api_keys.up.sql`, `account-api.go`, `model.go`/`repo.go`/`service.go`).
-- Built-in MCP server at `/mcp` exposing 50 workspace tools to local LLM agents over
+- Built-in MCP server at `/mcp` exposing 56 workspace tools to local LLM agents over
   the Model Context Protocol (Streamable HTTP, Stateless transport) -- workspaces,
   projects, milestones, workflows, subworkflows, features, comments, and personas
   (`mcp.go`, mounted in `main.go` behind `RequireAccount`).

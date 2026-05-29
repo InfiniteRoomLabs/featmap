@@ -1,4 +1,6 @@
 mware.go: RequireTrialOrPro
+plane.go: CommentOrigin.Valid
+plane.go: SyncStatus.Valid
 response.go: Response.AddMessage
 response.go: Response.AddData
 response.go: Response.JSON

@@ -174,11 +174,12 @@ Most MCP clients (Claude Desktop, Claude Code, Cursor, etc.) accept a JSON confi
 
 ### Available tools
 
-50 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
+56 tools are registered. Workspace context is passed as a tool argument (`workspace_id`), not via the `Workspace` header, so a single key can drive any workspace the owning account belongs to.
 
 | Group | Tools |
 |---|---|
 | Discovery | `list_workspaces`, `list_projects`, `get_board`, `get_feature`, `query_board` |
+| Plane sync | `set_plane_connection`, `get_plane_connection`, `test_plane_connection`, `link_feature_to_plane`, `unlink_feature_from_plane`, `plane_sync` |
 | Project | `create_project` |
 | Milestone | `create_milestone`, `update_milestone`, `move_milestone`, `set_milestone_color`, `set_milestone_status` |
 | Workflow | `create_workflow`, `update_workflow`, `move_workflow`, `set_workflow_color`, `set_workflow_status` |
@@ -233,6 +234,31 @@ The server returns rich JSON for every mutation, so an LLM agent can chain opera
 - Bind to `127.0.0.1` for local-only access. The MCP endpoint sits behind the same `RequireAccount` middleware as the rest of the API, but exposing it publicly without TLS + rate limiting is not recommended.
 - API keys cannot be recovered after creation. Revoke compromised keys immediately.
 - DNS rebinding protection is enabled by default in the upstream MCP Go SDK -- the `Host` header must match a loopback name for `/mcp` requests.
+
+## Plane comment sync
+
+Featmap can mirror comments both directions between a feature card and a [Plane](https://plane.so) work item, so a discussion happens once and shows up in both tools. This is a fork-local, **backend/agentic** feature (v1 has no UI yet -- drive it via REST, MCP, or CLI).
+
+**What v1 does:** comments only. Linking a card to a work item syncs comments in both directions, deduped by external id so nothing echo-loops. It does **not** create cards in Plane or sync any other field. Comment edits are not yet synced (create-mirror only).
+
+### Setup
+
+1. Add two fields to `conf.json`:
+   - `planeEncryptionKey` -- a base64-encoded 32-byte key (AES-256). The Plane API key is encrypted at rest with it; only a last-4 hint is ever stored or returned. Without this key, Plane connections cannot be created. Generate one with `head -c 32 /dev/urandom | base64`.
+   - `planePollInterval` -- e.g. `"5m"`; `"0"` or empty disables the background poller.
+2. Configure a project's connection (base URL e.g. `https://api.plane.so`, Plane workspace slug, API key, and a comma-separated list of watched Plane project ids) via the `set_plane_connection` MCP tool or `POST /v1/projects/{id}/plane/connection`. Auth to Plane uses the `X-API-Key` header.
+3. Link a card to a work item with `link_feature_to_plane` / `POST /v1/projects/{id}/plane/link`.
+
+### Triggering a sync
+
+The same engine runs from every surface:
+
+- **Background poller** -- the Go server syncs every connected project on `planePollInterval`.
+- **REST** -- `POST /v1/projects/{id}/plane/sync` (optionally `?feature_id=` to sync one card). Returns `{pushed, pulled, perLink:[{linkId, status, error}]}`.
+- **MCP** -- `plane_sync(workspace_id, project_id[, feature_id])`.
+- **CLI** -- `featmap plane sync --url <server> --key <api-key> --workspace <ws-id> --project <id> [--feature <id>] [--json]`.
+
+Each run pushes new local comments to Plane and pulls new Plane comments in; running it repeatedly is idempotent (no duplicates, no echo).
 
 ## License
 Featmap is licensed under Business Source License 1.1. See [license](https://github.com/amborle/featmap/blob/master/LICENSE)
