@@ -106,7 +106,9 @@ Run these in order; the **Expected** line is the pass criterion.
    Expected: `plane_sync` returns `{pushed: 1, pulled: 0, ...}`. Open the work item in Plane
    -> the "smoke test from featmap" comment is there.
 
-5. **Add a comment ON the Plane work item** (in the Plane UI), then sync pull:
+5. **Add a comment ON the Plane work item** (in the Plane UI), then sync pull.
+   To also confirm the stored-XSS guard, make the Plane comment contain HTML/markup,
+   e.g. `<b>bold</b> and <script>alert(1)</script>`:
    ```
    plane_sync(workspace_id="6c03...", project_id="5f06...", feature_id="<FEATURE_ID>")
    ```
@@ -114,7 +116,13 @@ Run these in order; the **Expected** line is the pass criterion.
    ```
    get_feature(workspace_id="6c03...", feature_id="<FEATURE_ID>", include_comments=true)
    ```
-   -> the Plane comment now appears as a featmap comment.
+   -> the Plane comment appears as a featmap comment, but **as sanitized plain text**:
+   pulled `comment_html` is run through `bluemonday.StrictPolicy()` before storage, so
+   ALL tags are stripped (no `<script>`, no `<b>`, no event handlers survive) -- the
+   `post` is the visible text only (e.g. `bold and alert(1)`). This is intentional:
+   `post` is a markdown field, the content is untrusted external HTML, and full
+   md<->html fidelity is deferred (icebox ICE-034). Confirm the stored `post` contains
+   NO `<script` / no tags.
 
 6. **Idempotency / no-echo** -- run sync a third time with no new comments:
    ```
