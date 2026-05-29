@@ -172,6 +172,11 @@ type Service interface {
 	GetPlaneConnection(projectID string) (*PlaneConnection, error)
 	SetPlaneConnection(projectID, baseURL, planeWorkspace, apiKey, watchedProjects string) (*PlaneConnection, error)
 	TestPlaneConnection(projectID string) error
+
+	LinkFeatureToPlane(featureID, planeProjectID, planeWorkItemID string) (*PlaneLink, error)
+	UnlinkFeatureFromPlane(featureID string) error
+	GetPlaneLinkByFeature(featureID string) (*PlaneLink, error)
+	FindPlaneLinksByProject(projectID string) ([]*PlaneLink, error)
 }
 
 type service struct {
@@ -2506,4 +2511,44 @@ func (s *service) TestPlaneConnection(projectID string) error {
 		return err
 	}
 	return c.TestConnection(context.Background())
+}
+
+func (s *service) GetPlaneLinkByFeature(featureID string) (*PlaneLink, error) {
+	return s.r.GetPlaneLinkByFeature(s.Member.WorkspaceID, featureID)
+}
+
+func (s *service) FindPlaneLinksByProject(projectID string) ([]*PlaneLink, error) {
+	return s.r.FindPlaneLinksByProject(s.Member.WorkspaceID, projectID)
+}
+
+func (s *service) LinkFeatureToPlane(featureID, planeProjectID, planeWorkItemID string) (*PlaneLink, error) {
+	f, err := s.r.GetFeature(s.Member.WorkspaceID, featureID)
+	if err != nil {
+		return nil, errors.New("feature not found")
+	}
+	m, err := s.r.GetMilestone(s.Member.WorkspaceID, f.MilestoneID)
+	if err != nil {
+		return nil, errors.New("milestone not found")
+	}
+	existing, _ := s.r.GetPlaneLinkByFeature(s.Member.WorkspaceID, featureID)
+	id := newUUID()
+	if existing != nil {
+		id = existing.ID
+	}
+	link := &PlaneLink{
+		WorkspaceID: s.Member.WorkspaceID, ID: id, ProjectID: m.ProjectID,
+		FeatureID: featureID, PlaneProjectID: planeProjectID, PlaneWorkItemID: planeWorkItemID,
+		LastStatus: string(StatusPending),
+	}
+	s.r.StorePlaneLink(link)
+	return link, nil
+}
+
+func (s *service) UnlinkFeatureFromPlane(featureID string) error {
+	link, err := s.r.GetPlaneLinkByFeature(s.Member.WorkspaceID, featureID)
+	if err != nil {
+		return errors.New("link not found")
+	}
+	s.r.DeletePlaneLink(s.Member.WorkspaceID, link.ID)
+	return nil
 }

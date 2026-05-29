@@ -27,3 +27,28 @@ func Test_SetGetPlaneConnection_encrypts(t *testing.T) {
 		}
 	})
 }
+
+func Test_LinkUnlinkFeature(t *testing.T) {
+	runInTx(t, func(t *testing.T, ctx context.Context, s Service, acc *Account, ws *Workspace, member *Member) {
+		s.SetConfig(Configuration{Environment: "development", Mode: "selfhost", PlaneEncryptionKey: testKeyB64(t)})
+		fx := newProjectFixture(t, s)
+		feat := fx.Features[0]
+
+		link, err := s.LinkFeatureToPlane(feat.ID, "plane-proj", "WI-1")
+		mustOK(t, err, "LinkFeatureToPlane")
+		if link.PlaneWorkItemID != "WI-1" {
+			t.Fatalf("bad link: %+v", link)
+		}
+		got, err := s.GetPlaneLinkByFeature(feat.ID)
+		mustOK(t, err, "GetPlaneLinkByFeature")
+		if got.ID != link.ID {
+			t.Fatal("link id mismatch")
+		}
+		if err := s.UnlinkFeatureFromPlane(feat.ID); err != nil {
+			t.Fatalf("unlink: %v", err)
+		}
+		if _, err := s.GetPlaneLinkByFeature(feat.ID); err == nil {
+			t.Fatal("expected link gone after unlink")
+		}
+	})
+}
