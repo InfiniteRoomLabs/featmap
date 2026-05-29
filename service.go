@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"log"
@@ -167,6 +168,10 @@ type Service interface {
 	ListAPIKeys() ([]*APIKey, error)
 	RevokeAPIKey(id string) error
 	AuthenticateAPIKey(plaintext string) (*APIKey, *Account, error)
+
+	GetPlaneConnection(projectID string) (*PlaneConnection, error)
+	SetPlaneConnection(projectID, baseURL, planeWorkspace, apiKey, watchedProjects string) (*PlaneConnection, error)
+	TestPlaneConnection(projectID string) error
 }
 
 type service struct {
@@ -2450,4 +2455,55 @@ func (s *service) AuthenticateAPIKey(plaintext string) (*APIKey, *Account, error
 	}
 	s.r.TouchAPIKeyLastUsed(k.ID)
 	return k, acc, nil
+}
+
+func (s *service) GetPlaneConnection(projectID string) (*PlaneConnection, error) {
+	return s.r.GetPlaneConnectionByProject(s.Member.WorkspaceID, projectID)
+}
+
+func (s *service) SetPlaneConnection(projectID, baseURL, planeWorkspace, apiKey, watchedProjects string) (*PlaneConnection, error) {
+	cipher, nonce, err := encryptPlaneKey(s.config.PlaneEncryptionKey, apiKey)
+	if err != nil {
+		return nil, err
+	}
+	hint := apiKey
+	if len(hint) > 4 {
+		hint = hint[len(hint)-4:]
+	}
+	now := time.Now().UTC()
+	existing, _ := s.r.GetPlaneConnectionByProject(s.Member.WorkspaceID, projectID)
+	id := newUUID()
+	created := now
+	if existing != nil {
+		id = existing.ID
+		created = existing.CreatedAt
+	}
+	conn := &PlaneConnection{
+		WorkspaceID: s.Member.WorkspaceID, ID: id, ProjectID: projectID,
+		BaseURL: baseURL, PlaneWorkspace: planeWorkspace,
+		APIKeyCipher: cipher, APIKeyNonce: nonce, APIKeyHint: hint,
+		WatchedProjects: watchedProjects, CreatedAt: created, LastModified: now,
+	}
+	s.r.StorePlaneConnection(conn)
+	return conn, nil
+}
+
+func (s *service) planeClientForConnection(conn *PlaneConnection) (*PlaneClient, error) {
+	key, err := decryptPlaneKey(s.config.PlaneEncryptionKey, conn.APIKeyCipher, conn.APIKeyNonce)
+	if err != nil {
+		return nil, err
+	}
+	return &PlaneClient{BaseURL: conn.BaseURL, APIKey: key, PlaneWorkspace: conn.PlaneWorkspace}, nil
+}
+
+func (s *service) TestPlaneConnection(projectID string) error {
+	conn, err := s.r.GetPlaneConnectionByProject(s.Member.WorkspaceID, projectID)
+	if err != nil {
+		return errors.New("no plane connection for project")
+	}
+	c, err := s.planeClientForConnection(conn)
+	if err != nil {
+		return err
+	}
+	return c.TestConnection(context.Background())
 }
